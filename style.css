@@ -1,0 +1,211 @@
+#qp-btn {
+    position: fixed;
+    z-index: 10000;
+    width: 42px;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    cursor: pointer;
+    touch-action: none;
+    color: var(--SmartThemeBodyColor, #ddd);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 82%, transparent);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.16));
+    box-shadow: 0 6px 18px rgba(0,0,0,.38);
+    backdrop-filter: blur(10px);
+    transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+}
+#qp-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.46); }
+#qp-btn.qp-press { transform: scale(.92); }
+#qp-btn i { font-size: 17px; opacity: .9; }
+.qp-hidden { display: none !important; }
+
+#qp-panel {
+    position: fixed;
+    z-index: 10001;
+    width: 190px;
+    height: 230px;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 14px;
+    color: var(--SmartThemeBodyColor, #ddd);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 88%, transparent);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.16));
+    box-shadow: 0 14px 40px rgba(0,0,0,.5);
+    backdrop-filter: blur(14px);
+}
+#qp-panel.qp-open {
+    display: flex;
+    animation: qp-in .18s ease;
+}
+@keyframes qp-in {
+    from { opacity: 0; transform: translateY(8px) scale(.97); }
+    to   { opacity: 1; transform: none; }
+}
+
+.qp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 7px 9px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.12));
+    background: rgba(255,255,255,.04);
+}
+body.qp-dragging .qp-head { cursor: grabbing; }
+.qp-title { font-size: calc(var(--mainFontSize, 15px) * .78); opacity: .9; white-space: nowrap; }
+.qp-title i { margin-right: 4px; opacity: .7; }
+.qp-acts { display: flex; gap: 3px; }
+.qp-ico {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; cursor: pointer; opacity: .68;
+    font-size: 11px;
+    transition: background .15s ease, opacity .15s ease;
+}
+.qp-ico:hover { opacity: 1; background: rgba(255,255,255,.1); }
+#qp-panel.qp-editing .qp-edit { opacity: 1; background: var(--SmartThemeQuoteColor, #6aa9ff); color: #111; }
+#qp-panel.qp-picking-active .qp-pick { opacity: 1; background: var(--SmartThemeQuoteColor, #6aa9ff); color: #111; }
+
+.qp-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 7px; }
+.qp-list { display: flex; flex-direction: column; gap: 5px; }
+.qp-empty {
+    font-size: calc(var(--mainFontSize, 15px) * .72);
+    opacity: .5; line-height: 1.4; text-align: center; padding: 14px 4px;
+}
+
+.qp-chip {
+    position: relative;
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 8px;
+    border-radius: 9px;
+    cursor: pointer;
+    font-size: calc(var(--mainFontSize, 15px) * .76);
+    background: rgba(255,255,255,.05);
+    border: 1px solid transparent;
+    transition: background .15s ease, border-color .15s ease, transform .12s ease;
+}
+.qp-chip:hover { background: rgba(255,255,255,.11); transform: translateX(2px); }
+.qp-chip-ic { font-size: 11px; opacity: .65; flex: 0 0 12px; text-align: center; }
+.qp-chip-lb { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-chip-del {
+    font-size: 10px; opacity: .48; padding: 3px; border-radius: 4px; cursor: pointer;
+    transition: opacity .15s ease, background .15s ease, color .15s ease;
+}
+.qp-chip-del:hover { opacity: 1; background: rgba(255,255,255,.12); color: #ff6b6b; }
+.qp-chip.qp-on { border-color: var(--SmartThemeQuoteColor, #6aa9ff); }
+.qp-chip.qp-on .qp-chip-ic { opacity: 1; color: var(--SmartThemeQuoteColor, #6aa9ff); }
+.qp-chip.qp-missing { opacity: .38; }
+.qp-chip.qp-flash { animation: qp-flash .35s ease; }
+@keyframes qp-flash {
+    0%   { background: var(--SmartThemeQuoteColor, #6aa9ff); }
+    100% { background: rgba(255,255,255,.05); }
+}
+
+.qp-chip-tools { display: none; gap: 5px; }
+#qp-panel.qp-editing .qp-chip-tools { display: flex; }
+#qp-panel.qp-editing .qp-chip { cursor: text; }
+.qp-t { font-size: 10px; opacity: .55; padding: 2px; border-radius: 4px; cursor: pointer; }
+.qp-t:hover { opacity: 1; background: rgba(255,255,255,.12); }
+
+.qp-rename {
+    flex: 1; min-width: 0;
+    font-size: inherit; color: inherit;
+    background: rgba(0,0,0,.35);
+    border: 1px solid var(--SmartThemeQuoteColor, #6aa9ff);
+    border-radius: 5px; padding: 1px 5px;
+    outline: none;
+}
+
+.qp-grip {
+    position: absolute; right: 0; bottom: 0;
+    width: 16px; height: 16px;
+    cursor: nwse-resize; touch-action: none; opacity: .35;
+    background: linear-gradient(135deg, transparent 50%, currentColor 50%, currentColor 60%, transparent 60%, transparent 72%, currentColor 72%, currentColor 82%, transparent 82%);
+}
+.qp-grip:hover { opacity: .7; }
+
+#qp-hl {
+    position: fixed; z-index: 10050;
+    pointer-events: none; opacity: 0;
+    display: none;
+    border-radius: 6px;
+    outline: 2px solid var(--SmartThemeQuoteColor, #6aa9ff);
+    outline-offset: 2px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #6aa9ff) 16%, transparent);
+    transition: left .07s linear, top .07s linear, width .07s linear, height .07s linear, opacity .12s ease;
+}
+#qp-hl.qp-show { display: block; }
+.qp-hl-tag {
+    position: absolute; left: 0; top: -20px;
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 1px 6px; border-radius: 5px;
+    font-size: 11px; color: #111;
+    background: var(--SmartThemeQuoteColor, #6aa9ff);
+}
+body.qp-picking { cursor: crosshair !important; }
+
+#qp-toast {
+    position: fixed; z-index: 10060;
+    left: 50%; bottom: 26px;
+    transform: translate(-50%, 14px);
+    opacity: 0; pointer-events: none;
+    padding: 7px 14px; border-radius: 10px;
+    font-size: calc(var(--mainFontSize, 15px) * .78);
+    color: var(--SmartThemeBodyColor, #ddd);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 92%, transparent);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.16));
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    backdrop-filter: blur(10px);
+    transition: opacity .2s ease, transform .2s ease;
+}
+#qp-toast.qp-show { opacity: 1; transform: translate(-50%, 0); }
+
+#qp-settings .inline-drawer-content { display: none; }
+#qp-settings.qp-set-open .inline-drawer-content { display: block; }
+#qp-settings.qp-set-open .qp-set-head .inline-drawer-icon { transform: rotate(180deg); }
+.qp-set-head .inline-drawer-icon { transition: transform .2s ease; }
+.qp-set-inner { display: flex; flex-direction: column; gap: 8px; padding: 8px 2px 4px; }
+.qp-set-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.qp-set-hint { opacity: .6; line-height: 1.35; }
+.qp-danger:hover { color: #ff6b6b; }
+
+@media (max-width: 760px) {
+    #qp-panel { max-width: 76vw; }
+    .qp-chip { padding: 8px; }
+    .qp-ico { width: 26px; height: 26px; }
+}
+
+.qp-chip-dot {
+    display: none;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex: 0 0 7px;
+    background: #e05555;
+    box-shadow: 0 0 5px rgba(224,85,85,.6);
+    transition: background .2s ease, box-shadow .2s ease;
+}
+.qp-chip.qp-tgl .qp-chip-dot { display: block; }
+.qp-chip.qp-tgl .qp-chip-ic { display: none; }
+.qp-chip.qp-on .qp-chip-dot {
+    background: #4ec66f;
+    box-shadow: 0 0 5px rgba(78,198,111,.6);
+}
+.qp-chip-sel {
+    flex: 1; min-width: 0;
+    font-size: inherit; color: inherit;
+    background: rgba(0,0,0,.3);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.16));
+    border-radius: 6px; padding: 2px 4px;
+    outline: none; cursor: pointer;
+}
+.qp-chip.qp-has-sel { cursor: default; }
+.qp-chip.qp-has-sel:hover { transform: none; }
+#qp-panel.qp-pinned .qp-head { cursor: default; }
+#qp-panel.qp-pinned .qp-grip { opacity: 0; pointer-events: none; }
+#qp-panel.qp-pinned .qp-pin { opacity: 1; background: var(--SmartThemeQuoteColor, #6aa9ff); color: #111; }
