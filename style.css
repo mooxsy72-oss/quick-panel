@@ -228,3 +228,26 @@ body.qp-picking { cursor: crosshair !important; }
 #qp-panel.qp-pinned .qp-head { cursor: default; }
 #qp-panel.qp-pinned .qp-grip { opacity: 0; pointer-events: none; }
 #qp-panel.qp-pinned .qp-pin { opacity: 1; background: var(--SmartThemeQuoteColor, #6aa9ff); color: #111; }
+
+.qp-extb-badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    background: rgba(255,255,255,.12);
+    color: rgba(255,255,255,.5);
+    margin-right: 6px;
+    min-width: 24px;
+    text-align: center;
+}
+.qp-extb-badge.qp-extb-on {
+    background: rgba(78,198,111,.25);
+    color: #4ec66f;
+}
+.qp-extb-badge.qp-extb-off {
+    background: rgba(224,85,85,.25);
+    color: #e05555;
+}
