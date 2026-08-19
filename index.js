@@ -5,7 +5,8 @@
     const PANEL_ID  = 'qp-panel';
     const LS_ITEMS  = 'qpItems';
     const LS_BTNPOS = 'qpBtnPos';
-    const LS_BOX    = 'qpPanelBox';
+    const LS_BOX_D  = 'qpPanelBox';
+    const LS_BOX_M  = 'qpPanelBoxM';
     const LS_CFG    = 'qpConfig';
     const DRAG_THRESHOLD = 8;
     const LONGPRESS_MS = 500;
@@ -13,6 +14,7 @@
 
     const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
     const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
+    const boxKey = () => isMobile() ? LS_BOX_M : LS_BOX_D;
 
     function lsGet(k, def) {
         try { const v = JSON.parse(localStorage.getItem(k)); return v === null ? def : v; }
@@ -23,7 +25,7 @@
     let items = lsGet(LS_ITEMS, []);
     let cfg   = Object.assign({ float: true, wand: true }, lsGet(LS_CFG, {}));
 
-    const saveItems = () => lsSet(LS_ITEMS, items);
+    const saveItems = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
     const saveCfg   = () => lsSet(LS_CFG, cfg);
 
     /* ---------------- СЕЛЕКТОРЫ ---------------- */
@@ -63,10 +65,22 @@
         return out;
     }
 
-    const INTERACTIVE = 'input, select, button, a, [role="button"], .menu_button, .interactable, .list-group-item, label, .inline-drawer-toggle, .drawer-toggle, .inline-drawer-header, .right_menu_button, .extensionsMenuExtensionButton, i[class*="fa-"], span[class*="fa-"], [onclick], .clickable, .toggleEnabled, [class*="toggle"], [class*="header"], [class*="tab"], h3, h4, h5';
+    const INTERACTIVE = 'input, select, button, a, [role="button"], [role="option"], [role="menuitem"], [role="tab"], .menu_button, .interactable, .list-group-item, label, .inline-drawer-toggle, .drawer-toggle, .inline-drawer-header, .right_menu_button, .extensionsMenuExtensionButton, .select2-results__option, .select2-selection, i[class*="fa-"], span[class*="fa-"], [onclick], .clickable, .toggleEnabled, [class*="toggle"], [class*="header"], [class*="tab"], h3, h4, h5';
 
     function findInteractive(el) {
         if (!el || !el.closest) return null;
+        // select2 (выбор лорбука и т.п.): пункт выпадашки -> подменяем на нативный select
+        const s2opt = el.closest('.select2-results__option');
+        if (s2opt) {
+            const m = /^select2-(.+?)-result/.exec(s2opt.id || '');
+            const orig = m ? document.getElementById(m[1]) : null;
+            if (orig && orig.tagName === 'SELECT') return orig;
+        }
+        const s2box = el.closest('.select2-container');
+        if (s2box) {
+            const prev = s2box.previousElementSibling;
+            if (prev && prev.tagName === 'SELECT') return prev;
+        }
         // Приоритет: кнопка с id важнее обёртки
         let hit = el.closest('button, input, select, a, .menu_button, .inline-drawer-toggle, .drawer-toggle, .inline-drawer-header, h3, h4, h5, [class*="section-toggle"], [class*="section_toggle"]')
                || el.closest(INTERACTIVE);
@@ -139,44 +153,21 @@
     }
 
     function fire(el) {
-        // 1. Тоглы и чекбоксы — тихий клик, ничего не открываем
+        // 1. Тоглы и чекбоксы — клик ровно по себе
         if (isToggleLike(el)) { el.click(); return; }
 
-        // 2. Заголовок дровера/сайдбара — сначала раскрываем скрытых предков,
-        //    чтобы развёрнутое содержимое было видно, потом кликаем заголовок
-        const head = isDrawerHead(el) ? el : el.closest('.inline-drawer-toggle, .drawer-toggle');
-        if (head) {
-            const opened = revealParents(head);
-            if (opened.length) setTimeout(() => head.click(), 300);
-            else head.click();
+        // 2. Заголовок-раскрывашка, но только если это САМ выбранный элемент
+        if (isDrawerHead(el)) {
+            const opened = revealParents(el);
+            if (opened.length) setTimeout(() => el.click(), 300);
+            else el.click();
             return;
         }
 
-        // 3. Любая другая кнопка — просто клик. Обработчик срабатывает и для
-        //    скрытого элемента, поэтому открывать/закрывать панели не нужно.
-        //    Именно лишняя навигация и давала это мигание сайдбара.
+        // 3. Всё остальное — клик по выбранному элементу.
+        //    Никакого всплытия к предкам: именно оно било по #extensions-settings-button
+        //    и дёргало чужие чекбоксы вместо нужной кнопки.
         el.click();
-    }
-
-    function resolveItem(it) {
-        let el = safeQuery(it.sel);
-        if (el) return el;
-        const all = document.querySelectorAll(INTERACTIVE);
-        if (it.title) {
-            for (const c of all) if (c.getAttribute('title') === it.title) { el = c; break; }
-        }
-        if (!el && it.txt) {
-            for (const c of all) {
-                if ((c.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) === it.txt) { el = c; break; }
-            }
-        }
-        if (!el && it.name) {
-            for (const c of all) {
-                if (nameFor(c) === it.name) { el = c; break; }
-            }
-        }
-        if (el) { it.sel = selectorFor(el); saveItems(); }
-        return el;
     }
 
     /* ---------------- ТОСТ ---------------- */
@@ -186,13 +177,19 @@
         if (!toastEl) {
             toastEl = document.createElement('div');
             toastEl.id = 'qp-toast';
+            toastEl.setAttribute('popover', 'manual');
             document.body.appendChild(toastEl);
         }
         toastEl.textContent = text;
+        try { toastEl.showPopover(); } catch (e) {}
         toastEl.classList.add('qp-show');
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toastEl.classList.remove('qp-show'), 1800);
+        toastTimer = setTimeout(() => {
+            toastEl.classList.remove('qp-show');
+            setTimeout(() => { try { toastEl.hidePopover(); } catch (e) {} }, 250);
+        }, 1800);
     }
+
 
     /* ---------------- РЕЖИМ ВЫБОРА ---------------- */
 
@@ -206,10 +203,12 @@
         if (!hl) {
             hl = document.createElement('div');
             hl.id = 'qp-hl';
+            hl.setAttribute('popover', 'manual');
             hl.innerHTML = '<span class="qp-hl-tag"></span>';
             document.body.appendChild(hl);
         }
         hl.classList.add('qp-show');
+        try { hl.showPopover(); } catch (e) {}
         toast('Кликни по кнопке или тоглу чтобы добавить. Повторный клик прицела — выкл.');
         document.addEventListener('pointermove', onPickMove, true);
         document.addEventListener('click', onPickClick, true);
@@ -220,7 +219,10 @@
         picking = false;
         document.body.classList.remove('qp-picking');
         if (panel) panel.classList.remove('qp-picking-active');
-        if (hl) hl.classList.remove('qp-show');
+        if (hl) {
+            hl.classList.remove('qp-show');
+            try { hl.hidePopover(); } catch (e) {}
+        }
         document.removeEventListener('pointermove', onPickMove, true);
         document.removeEventListener('click', onPickClick, true);
         document.removeEventListener('keydown', onPickKey, true);
@@ -269,10 +271,23 @@
 
     function addItem(el) {
         const sel = selectorFor(el);
-        if (items.some(i => i.sel === sel)) { toast('Уже добавлено'); return; }
+        const eid = el.id || '';
+        if (items.some(i => i.fp && i.fp.eid && i.fp.eid === eid && eid)) {
+            toast('Уже добавлено (совпадает id)');
+            return;
+        }
+        if (items.some(i => i.sel === sel)) {
+            toast('Уже добавлено (совпадает селектор)');
+            return;
+        }
+        const id = 'i' + Date.now();
+        el.setAttribute('data-qp-id', id);
+        const fp = fingerprint(el);
+        fp.aid = id;
         items.push({
-            id: 'i' + Date.now(), sel,
-            name: nameFor(el), icon: iconFor(el),
+            id, sel, _el: el, fp,
+            name: nameFor(el),
+            icon: iconFor(el),
             title: el.getAttribute('title') || '',
             txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40)
         });
@@ -314,8 +329,8 @@
             toast(p ? 'Панель закреплена' : 'Панель откреплена');
         });
 
-        const box = lsGet(LS_BOX, null);
-        if (box && !isMobile()) {
+        const box = lsGet(boxKey(), null);
+        if (box) {
             if (box.width)  panel.style.width  = clamp(box.width, 150, window.innerWidth - 16) + 'px';
             if (box.height) panel.style.height = clamp(box.height, 140, window.innerHeight - 16) + 'px';
         }
@@ -331,8 +346,8 @@
         });
         panel.querySelector('.qp-head').addEventListener('dblclick', (e) => {
             if (e.target.closest('.qp-ico')) return;
-            if (el.classList.contains('qp-pinned')) return;
-            try { localStorage.removeItem(LS_BOX); } catch (err) {}
+            if (panel.classList.contains('qp-pinned')) return;
+            try { localStorage.removeItem(boxKey()); } catch (err) {}
             panel.style.width = '190px';
             panel.style.height = '230px';
             requestAnimationFrame(() => placePanel(true));
@@ -349,7 +364,7 @@
         if (!items.length) {
             const empty = document.createElement('div');
             empty.className = 'qp-empty';
-            empty.textContent = 'Пусто. Зажми любой элемент в таверне чтобы добавить его сюда.';
+            empty.textContent = 'Пусто. Включи прицел и кликни любой элемент таверны.';
             listEl.appendChild(empty);
             return;
         }
@@ -359,18 +374,15 @@
             chip.className = 'qp-chip' + (target ? '' : ' qp-missing');
             chip.title = target ? it.name : 'Элемент не найден на странице';
 
+            const dot = document.createElement('span');
+            dot.className = 'qp-chip-dot';
             const ic = document.createElement('i');
             ic.className = it.icon + ' qp-chip-ic';
-
             const label = document.createElement('span');
             label.className = 'qp-chip-lb';
             label.textContent = it.name;
+            chip.append(dot, ic, label);
 
-            const dot = document.createElement('span');
-            dot.className = 'qp-chip-dot';
-            chip.appendChild(dot);
-            chip.appendChild(ic);
-            chip.appendChild(label);
             if (target && target.tagName === 'SELECT' && !panel.classList.contains('qp-editing')) {
                 const sel = document.createElement('select');
                 sel.className = 'qp-chip-sel';
@@ -395,7 +407,6 @@
                 chip.appendChild(sel);
             }
 
-            // Кнопка удаления всегда видна
             const del = document.createElement('i');
             del.className = 'fa-solid fa-trash qp-chip-del';
             del.title = 'Удалить';
@@ -405,10 +416,11 @@
             tools.className = 'qp-chip-tools';
             tools.innerHTML =
                 '<i class="fa-solid fa-arrow-up qp-t qp-up" title="Выше"></i>' +
-                '<i class="fa-solid fa-arrow-down qp-t qp-dn" title="Ниже"></i>';
+                '<i class="fa-solid fa-arrow-down qp-t qp-dn" title="Ниже"></i>' +
+                '<i class="fa-solid fa-right-left qp-t qp-inv" title="Перевернуть индикатор"></i>' +
+                '<i class="fa-solid fa-circle-info qp-t qp-info" title="Что реально найдено"></i>';
             chip.appendChild(tools);
 
-            // Долгое нажатие запускает селектор
             let longTimer = null;
             chip.addEventListener('pointerdown', (e) => {
                 if (e.target.closest('.qp-chip-del, .qp-chip-tools')) return;
@@ -417,33 +429,35 @@
                     if (!panel.classList.contains('qp-editing')) startPick();
                 }, LONGPRESS_MS);
             });
-            chip.addEventListener('pointerup', () => { clearTimeout(longTimer); });
-            chip.addEventListener('pointercancel', () => { clearTimeout(longTimer); });
-            chip.addEventListener('pointermove', () => { clearTimeout(longTimer); });
+            ['pointerup', 'pointercancel', 'pointermove'].forEach(ev =>
+                chip.addEventListener(ev, () => clearTimeout(longTimer)));
 
             chip.addEventListener('click', (e) => {
-                // Удаление всегда работает
                 if (e.target.closest('.qp-chip-del')) {
-                    items.splice(idx, 1);
-                    saveItems();
-                    renderList();
-                    return;
+                    items.splice(idx, 1); saveItems(); renderList(); return;
                 }
-                if (chip.classList.contains('qp-has-sel')) return;
-
                 if (panel.classList.contains('qp-editing')) {
-                    if (e.target.closest('.qp-up'))  { if (idx > 0) { items.splice(idx - 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
-                    if (e.target.closest('.qp-dn'))  { if (idx < items.length - 1) { items.splice(idx + 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
+                    if (e.target.closest('.qp-up')) { if (idx > 0) { items.splice(idx - 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
+                    if (e.target.closest('.qp-dn')) { if (idx < items.length - 1) { items.splice(idx + 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
+                    if (e.target.closest('.qp-inv')) { it.inv = !it.inv; saveItems(); syncStates(); toast(it.inv ? 'Индикатор перевёрнут' : 'Индикатор как есть'); return; }
+                    if (e.target.closest('.qp-info')) { const t = resolveItem(it); toast(t ? describe(t) : 'Элемент не найден'); return; }
+                    if (chip.classList.contains('qp-has-sel')) return;
                     startRename(chip, label, it);
                     return;
                 }
+                if (chip.classList.contains('qp-has-sel')) return;
                 const t = resolveItem(it);
-                if (!t) { toast('Элемент не найден'); renderList(); return; }
+                if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
+                const before = sigOf(t);
                 chip.classList.remove('qp-flash');
                 void chip.offsetWidth;
                 chip.classList.add('qp-flash');
                 fire(t);
-                setTimeout(syncStates, 120);
+                [80, 220, 500, 1000, 1800].forEach(ms => setTimeout(() => {
+                    const t2 = resolveItem(it);
+                    if (t2) learnSig(it, before, sigOf(t2));
+                    syncStates();
+                }, ms));
             });
 
             listEl.appendChild(chip);
@@ -470,9 +484,130 @@
         input.addEventListener('blur', () => done(true));
         input.addEventListener('click', (e) => e.stopPropagation());
     }
+    function fingerprint(el) {
+        const b = el.closest('.inline-drawer, .drawer, [id*="settings"]');
+        const h = b && (b.querySelector('b, .inline-drawer-toggle, h3, h4') || b);
+        return {
+            tag: el.tagName,
+            eid: el.id || '',
+            aid: el.getAttribute('data-qp-id') || '',
+            title: el.getAttribute('title') || '',
+            txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
+            host: h ? (h.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 35) : ''
+        };
+    }
+
+    function fpMatch(el, fp) {
+        if (!el || !fp) return false;
+        if (el.tagName !== fp.tag) return false;
+        if (fp.aid && el.getAttribute('data-qp-id') !== fp.aid) return false;
+        if (fp.eid) {
+            if (el.id !== fp.eid) return false;
+        } else {
+            if (el.id) return false;
+        }
+        if (fp.title && (el.getAttribute('title') || '') !== fp.title) return false;
+        const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+        if (fp.txt && txt !== fp.txt) return false;
+        if (fp.host) {
+            const b = el.closest('.inline-drawer, .drawer, [id*="settings"]');
+            const h = b && (b.querySelector('b, .inline-drawer-toggle, h3, h4') || b);
+            const host = h ? (h.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 35) : '';
+            if (host !== fp.host) return false;
+        }
+        return true;
+    }
+
+    function describe(el) {
+        const cls = Array.from(el.classList).slice(0, 2).join('.');
+        const sig = sigOf(el);
+        return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '') + ' | ' + sig;
+    }
+
+    function resolveItem(it) {
+        if (!it.fp) {
+            const g = safeQuery(it.sel);
+            if (!g) return null;
+            it.fp = fingerprint(g);
+            if (!it.fp.aid) { it.fp.aid = it.id; g.setAttribute('data-qp-id', it.id); }
+            saveItems();
+        }
+        if (it._el && it._el.isConnected && fpMatch(it._el, it.fp)) return it._el;
+        it._el = null;
+
+        let el = null;
+        if (it.fp.aid) {
+            el = document.querySelector('[data-qp-id="' + it.fp.aid + '"]');
+            if (el && fpMatch(el, it.fp)) { it._el = el; return el; }
+        }
+        if (it.fp.eid) {
+            el = document.getElementById(it.fp.eid);
+            if (el && fpMatch(el, it.fp)) {
+                if (!el.getAttribute('data-qp-id')) el.setAttribute('data-qp-id', it.id);
+                it._el = el;
+                return el;
+            }
+            return null;
+        }
+        el = safeQuery(it.sel);
+        if (el && fpMatch(el, it.fp)) {
+            if (!el.getAttribute('data-qp-id')) el.setAttribute('data-qp-id', it.id);
+            it._el = el;
+            return el;
+        }
+        for (const c of document.querySelectorAll(INTERACTIVE)) {
+            if (!fpMatch(c, it.fp)) continue;
+            c.setAttribute('data-qp-id', it.id);
+            it.sel = selectorFor(c);
+            it._el = c;
+            saveItems();
+            return c;
+        }
+        return null;
+    }
 
     function safeQuery(sel) {
         try { return document.querySelector(sel); } catch (e) { return null; }
+    }
+
+    function stateNode(t) {
+        if (t.matches('input[type=checkbox], input[type=radio]')) return t;
+        const scope = t.closest('label') || t;
+        const marked = scope.querySelector('[class*="toggle-on"], [class*="toggle-off"], [class*="toggle_on"], [class*="toggle_off"], .fa-toggle-on, .fa-toggle-off');
+        if (marked) return marked;
+        const inp = scope.querySelector('input[type=checkbox], input[type=radio]');
+        if (inp) return inp;
+        return t;
+    }
+
+    function sigOf(t) {
+        const n = stateNode(t);
+        if (n.matches && n.matches('input[type=checkbox], input[type=radio]')) return 'chk:' + (n.checked ? 1 : 0);
+        return 'cls:' + Array.from(n.classList).filter(c => !/^(qp-|hover|dragging)/.test(c)).sort().join(' ');
+    }
+
+    function guessOn(sig) {
+        if (sig.indexOf('chk:') === 0) return sig === 'chk:1';
+        const s = ' ' + sig.slice(4).replace(/[-_]/g, ' ').toLowerCase() + ' ';
+        if (/ (off|disabled|disable|inactive|closed|hidden|false|no) /.test(s)) return false;
+        if (/ (on|enabled|enable|active|checked|open|opened|shown|true|yes) /.test(s)) return true;
+        return null;
+    }
+
+    function stateOf(it, t) {
+        if (!t || isDrawerHead(t)) return 'none';
+        const sig = sigOf(t);
+        let on = guessOn(sig);
+        if (on === null && it.sigOn) on = (sig === it.sigOn);
+        else if (on === null && it.sigOff) on = (sig !== it.sigOff);
+        if (on === null) return 'unknown';
+        return (it.inv ? !on : on) ? 'on' : 'off';
+    }
+
+    function learnSig(it, before, after) {
+        if (!before || !after || before === after) return;
+        if (guessOn(after) !== null) return;
+        it.sigOff = before; it.sigOn = after; saveItems();
     }
 
     function syncStates() {
@@ -482,24 +617,11 @@
             if (!it) return;
             const t = resolveItem(it);
             chip.classList.toggle('qp-missing', !t);
-            let on = false, isTgl = false;
-            if (t && !isDrawerHead(t)) {
-                if (t.matches('input[type=checkbox], input[type=radio]')) {
-                    isTgl = true; on = t.checked;
-                } else if (/fa-toggle-on/.test(t.className)) {
-                    isTgl = true; on = true;
-                } else if (/fa-toggle-off/.test(t.className)) {
-                    isTgl = true; on = false;
-                } else if (/(^|[-_\s])toggle([-_\s]|$)/i.test(t.className || '')) {
-                    isTgl = true; on = !t.closest('[class*="disabled"]');
-                } else {
-                    const inn = t.querySelector('input[type=checkbox]');
-                    if (inn) { isTgl = true; on = inn.checked; }
-                }
-            }
-            chip.classList.toggle('qp-tgl', isTgl);
-            chip.classList.toggle('qp-on', on);
-                        const ms = chip.querySelector('.qp-chip-sel');
+            const st = stateOf(it, t);
+            chip.classList.toggle('qp-tgl', st !== 'none');
+            chip.classList.toggle('qp-on', st === 'on');
+            chip.classList.toggle('qp-unknown', st === 'unknown');
+            const ms = chip.querySelector('.qp-chip-sel');
             if (ms && t && t.tagName === 'SELECT' && document.activeElement !== ms) {
                 if (ms.options.length !== t.options.length) { renderList(); return; }
                 ms.value = t.value;
@@ -507,18 +629,49 @@
         });
     }
 
+    let mo = null, lastSync = 0, syncPend = null;
+    function requestSync() {
+        const now = Date.now();
+        if (now - lastSync > 220) { lastSync = now; syncStates(); return; }
+        if (syncPend) return;
+        syncPend = setTimeout(() => { syncPend = null; lastSync = Date.now(); syncStates(); }, 220);
+    }
+    function startWatch() {
+        if (mo) return;
+        mo = new MutationObserver((muts) => {
+            for (const m of muts) {
+                const t = m.target;
+                if (t && t.closest && (t.closest(OWN) || t.closest('#chat'))) continue;
+                requestSync();
+                return;
+            }
+        });
+        mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'checked'] });
+    }
+    function stopWatch() { if (mo) { mo.disconnect(); mo = null; } }
+
     function placePanel(ignoreSaved) {
+        const box = ignoreSaved ? null : lsGet(boxKey(), null);
         if (isMobile()) {
-            const w = Math.min(220, Math.round(window.innerWidth * 0.62));
-            panel.style.width = w + 'px';
-            if (!panel.style.height) panel.style.height = '260px';
-            panel.style.left = Math.round((window.innerWidth - w) / 2) + 'px';
-            panel.style.top  = Math.round(window.innerHeight * 0.22) + 'px';
+            const defW = Math.min(220, Math.round(window.innerWidth * 0.62));
+            panel.style.width = (box && typeof box.width === 'number')
+                ? clamp(box.width, 150, window.innerWidth - 16) + 'px'
+                : defW + 'px';
+            panel.style.height = (box && typeof box.height === 'number')
+                ? clamp(box.height, 140, window.innerHeight - 16) + 'px'
+                : (panel.style.height || '260px');
+            const pw = panel.offsetWidth || defW, ph = panel.offsetHeight || 260;
+            if (box && typeof box.left === 'number') {
+                panel.style.left = clamp(box.left, 4, Math.max(4, window.innerWidth - pw - 4)) + 'px';
+                panel.style.top  = clamp(box.top,  4, Math.max(4, window.innerHeight - ph - 4)) + 'px';
+            } else {
+                panel.style.left = Math.round((window.innerWidth - pw) / 2) + 'px';
+                panel.style.top  = Math.round(window.innerHeight * 0.22) + 'px';
+            }
             return;
         }
         const w = panel.offsetWidth || 190;
         const h = panel.offsetHeight || 230;
-        const box = ignoreSaved ? null : lsGet(LS_BOX, null);
         if (box && typeof box.left === 'number') {
             panel.style.left = clamp(box.left, 8, Math.max(8, window.innerWidth - w - 8)) + 'px';
             panel.style.top  = clamp(box.top,  8, Math.max(8, window.innerHeight - h - 8)) + 'px';
@@ -529,8 +682,8 @@
     }
 
     function saveBox() {
-        if (!panel || isMobile()) return;
-        lsSet(LS_BOX, { left: panel.offsetLeft, top: panel.offsetTop, width: panel.offsetWidth, height: panel.offsetHeight });
+        if (!panel) return;
+        lsSet(boxKey(), { left: panel.offsetLeft, top: panel.offsetTop, width: panel.offsetWidth, height: panel.offsetHeight });
     }
 
     function openPanel() {
@@ -538,14 +691,18 @@
         panel.classList.add('qp-open');
         requestAnimationFrame(() => placePanel(false));
         renderList();
+        startWatch();
         clearInterval(tickTimer);
         tickTimer = setInterval(syncStates, 1200);
     }
     function closePanel() {
+        if (panel && panel.classList.contains('qp-open')) saveBox();
         if (panel) panel.classList.remove('qp-open');
         clearInterval(tickTimer);
+        stopWatch();
         stopPick();
     }
+    
     function togglePanel() {
         if (panel && panel.classList.contains('qp-open')) closePanel(); else openPanel();
     }
@@ -753,7 +910,7 @@
         bOpen.addEventListener('click', () => togglePanel());
         bPick.addEventListener('click', () => startPick());
         bReset.addEventListener('click', () => {
-            try { localStorage.removeItem(LS_BTNPOS); localStorage.removeItem(LS_BOX); } catch (e) {}
+            try { localStorage.removeItem(LS_BTNPOS); localStorage.removeItem(LS_BOX_D); localStorage.removeItem(LS_BOX_M); } catch (e) {}
             const w = btn.offsetWidth || 42;
             btn.style.left = (window.innerWidth - w - 14) + 'px';
             btn.style.top  = Math.round(window.innerHeight * 0.5) + 'px';
@@ -772,11 +929,16 @@
 
     window.addEventListener('resize', () => {
         const w = btn.offsetWidth, h = btn.offsetHeight;
-        btn.style.left = clamp(btn.offsetLeft, 4, window.innerWidth - w - 4) + 'px';
-        btn.style.top  = clamp(btn.offsetTop,  4, window.innerHeight - h - 4) + 'px';
+        if (btn.offsetLeft > window.innerWidth - w - 4 || btn.offsetTop > window.innerHeight - h - 4) {
+            btn.style.left = clamp(btn.offsetLeft, 4, window.innerWidth - w - 4) + 'px';
+            btn.style.top  = clamp(btn.offsetTop,  4, window.innerHeight - h - 4) + 'px';
+        }
         if (panel && panel.classList.contains('qp-open')) {
-            panel.style.left = clamp(panel.offsetLeft, 8, Math.max(8, window.innerWidth  - panel.offsetWidth  - 8)) + 'px';
-            panel.style.top  = clamp(panel.offsetTop,  8, Math.max(8, window.innerHeight - panel.offsetHeight - 8)) + 'px';
+            const pw = panel.offsetWidth, ph = panel.offsetHeight;
+            if (panel.offsetLeft > window.innerWidth - pw - 4 || panel.offsetTop > window.innerHeight - ph - 4) {
+                panel.style.left = clamp(panel.offsetLeft, 4, Math.max(4, window.innerWidth  - pw - 4)) + 'px';
+                panel.style.top  = clamp(panel.offsetTop,  4, Math.max(4, window.innerHeight - ph - 4)) + 'px';
+            }
         }
     });
 
