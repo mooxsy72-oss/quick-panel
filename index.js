@@ -23,6 +23,8 @@
     function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 
     let items = lsGet(LS_ITEMS, []);
+    window.qpDebug = { get items() { return items; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
+   
     let cfg   = Object.assign({ float: true, wand: true }, lsGet(LS_CFG, {}));
 
     const saveItems = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
@@ -153,6 +155,11 @@
     }
 
     function fire(el) {
+        // 0. Парные маркеры (ExtBlocks и подобные): кликаем по видимому span'у,
+        //    а не по спрятанному — иначе чип работает только в одну сторону
+        const pair = markerPair(el);
+        if (pair) { pair.click(); return; }
+
         // 1. Тоглы и чекбоксы — клик ровно по себе
         if (isToggleLike(el)) { el.click(); return; }
 
@@ -315,6 +322,7 @@
             </div>
             <div class="qp-body"><div class="qp-list"></div></div>
             <div class="qp-grip"></div>`;
+
         document.body.appendChild(panel);
          ['pointerdown', 'mousedown', 'click', 'touchstart'].forEach(ev =>
             panel.addEventListener(ev, (e) => e.stopPropagation()));       
@@ -340,10 +348,12 @@
             if (picking) stopPick();
             else startPick();
         });
+
         panel.querySelector('.qp-edit').addEventListener('click', () => {
             panel.classList.toggle('qp-editing');
             renderList();
         });
+
         panel.querySelector('.qp-head').addEventListener('dblclick', (e) => {
             if (e.target.closest('.qp-ico')) return;
             if (panel.classList.contains('qp-pinned')) return;
@@ -546,6 +556,7 @@
         const sig = sigOf(el);
         return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '') + ' | ' + sig;
     }
+
     function resolveItem(it) {
         if (!it.fp) {
             const g = safeQuery(it.sel);
@@ -570,11 +581,22 @@
         }
 
         el = safeQuery(it.sel);
-        if (el && fpScore(el, it.fp) >= 0) {
-            el.setAttribute('data-qp-id', it.fp.aid || it.id);
+        if (el) {
+            const score = fpScore(el, it.fp);
+            if (score >= 0) {
+                el.setAttribute('data-qp-id', it.fp.aid || it.id);
+                it._el = el;
+                return el;
+            }
+            // Отпечаток не совпал, но селектор нашёл элемент — переснимаем отпечаток
+            it.fp = fingerprint(el);
+            if (!it.fp.aid) it.fp.aid = it.id;
+            el.setAttribute('data-qp-id', it.fp.aid);
             it._el = el;
+            saveItems();
             return el;
         }
+
 
         let best = null, bestScore = -1;
         for (const c of document.querySelectorAll(INTERACTIVE)) {
@@ -596,10 +618,53 @@
         try { return document.querySelector(sel); } catch (e) { return null; }
     }
 
+    const MARK_SEL = '[class*="toggle-on"], [class*="toggle-off"], [class*="toggle_on"], [class*="toggle_off"], .fa-toggle-on, .fa-toggle-off';
+
+    // Элемент спрятан сам по себе (не считая скрытых предков)
+    function ownHidden(el) {
+        try {
+            const s = getComputedStyle(el);
+            if (s.display === 'none' || s.visibility === 'hidden') return true;
+            if (parseFloat(s.opacity) === 0) return true;
+        } catch (e) {}
+        return /(^|\s)(displayNone|hidden|hide|is-hidden|d-none)(\s|$)/.test(String(el.className || ''));
+    }
+
+    // Виджеты вроде ExtBlocks держат в одном label два span'а — toggle-on и toggle-off —
+    // и прячут один. Класс никогда не меняется, меняется только видимость.
+    // Возвращаем тот маркер, который сейчас показан.
+    // ВАЖНО: срабатывает ТОЛЬКО для ExtBlocks, иначе ломает обычные чекбоксы таверны.
+    function markerPair(t) {
+        const scope = t.closest('label') || t.parentElement;
+        if (!scope) return null;
+
+        // Проверка: это ExtBlocks или обычный label?
+        const scopeCls = String(scope.className || '');
+        const tCls = String(t.className || '');
+        const isExtBlocks = /ExtBlocks/i.test(scopeCls) || /ExtBlocks/i.test(tCls);
+
+        let marks;
+        try { marks = Array.from(scope.querySelectorAll(MARK_SEL)); } catch (e) { return null; }
+        if (t.matches && t.matches(MARK_SEL) && marks.indexOf(t) < 0) marks.push(t);
+        if (marks.length < 2) return null;
+
+        // Если это НЕ ExtBlocks, проверяем классы маркеров — может быть другой похожий виджет
+        if (!isExtBlocks) {
+            const hasPair = marks.some(m => /toggle[-_](on|off)/i.test(String(m.className || '')));
+            if (!hasPair) return null; // обычный label с иконками — не наш случай
+        }
+
+        const shown = marks.filter(m => !ownHidden(m));
+        return shown.length === 1 ? shown[0] : null;
+    }
+
     function stateNode(t) {
         if (t.matches('input[type=checkbox], input[type=radio]')) return t;
+        const pair = markerPair(t);
+        if (pair) return pair;
+        if (t.matches(MARK_SEL)) return t;
         const scope = t.closest('label') || t;
-        const marked = scope.querySelector('[class*="toggle-on"], [class*="toggle-off"], [class*="toggle_on"], [class*="toggle_off"], .fa-toggle-on, .fa-toggle-off');
+        const marked = scope.querySelector(MARK_SEL);
         if (marked) return marked;
         const inp = scope.querySelector('input[type=checkbox], input[type=radio]');
         if (inp) return inp;
