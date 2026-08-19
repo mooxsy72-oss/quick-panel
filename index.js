@@ -373,7 +373,6 @@
             const chip = document.createElement('div');
             chip.className = 'qp-chip' + (target ? '' : ' qp-missing');
             chip.title = target ? it.name : 'Элемент не найден на странице';
-
             const dot = document.createElement('span');
             dot.className = 'qp-chip-dot';
             const ic = document.createElement('i');
@@ -484,87 +483,114 @@
         input.addEventListener('blur', () => done(true));
         input.addEventListener('click', (e) => e.stopPropagation());
     }
-    function fingerprint(el) {
+    function rowOf(el) {
+        const row = el.closest('li, tr, .list-group-item, [class*="-row"], [class*="-item"], [class*="-block"], .flex-container');
+        if (!row || row === el) return '';
+        return (row.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    }
+
+    function stableCls(el) {
+        return Array.from(el.classList)
+            .filter(c => !/^(qp-|ui-|hover|dragging)/.test(c) && !STATE_CLS.test(c))
+            .sort().join(' ');
+    }
+
+    function hostOf(el) {
         const b = el.closest('.inline-drawer, .drawer, [id*="settings"]');
         const h = b && (b.querySelector('b, .inline-drawer-toggle, h3, h4') || b);
+        return h ? (h.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 35) : '';
+    }
+
+    function fingerprint(el) {
+        const p = el.parentElement;
         return {
             tag: el.tagName,
             eid: el.id || '',
             aid: el.getAttribute('data-qp-id') || '',
+            cls: stableCls(el),
             title: el.getAttribute('title') || '',
             txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
-            host: h ? (h.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 35) : ''
+            row: rowOf(el),
+            pos: p ? Array.from(p.children).indexOf(el) : -1,
+            host: hostOf(el)
         };
     }
 
-    function fpMatch(el, fp) {
-        if (!el || !fp) return false;
-        if (el.tagName !== fp.tag) return false;
-        if (fp.aid && el.getAttribute('data-qp-id') !== fp.aid) return false;
-        if (fp.eid) {
-            if (el.id !== fp.eid) return false;
-        } else {
-            if (el.id) return false;
-        }
-        if (fp.title && (el.getAttribute('title') || '') !== fp.title) return false;
+    function fpScore(el, fp) {
+        if (!el || !fp || el.nodeType !== 1) return -1;
+        if (el.tagName !== fp.tag) return -1;
+        if (fp.eid) return el.id === fp.eid ? 100 : -1;
+        if (el.id) return -1;
+
+        if (fp.cls && stableCls(el) !== fp.cls) return -1;
+        if (fp.row && rowOf(el) !== fp.row) return -1;
+        if (fp.host && hostOf(el) !== fp.host) return -1;
+
+        let s = 0;
+        if (fp.aid && el.getAttribute('data-qp-id') === fp.aid) s += 40;
+        if (fp.cls) s += 25;
+        if (fp.row) s += 30;
+        if (fp.host) s += 15;
+        const p = el.parentElement;
+        if (fp.pos >= 0 && p && Array.from(p.children).indexOf(el) === fp.pos) s += 10;
+        if (fp.title && el.getAttribute('title') === fp.title) s += 5;
         const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
-        if (fp.txt && txt !== fp.txt) return false;
-        if (fp.host) {
-            const b = el.closest('.inline-drawer, .drawer, [id*="settings"]');
-            const h = b && (b.querySelector('b, .inline-drawer-toggle, h3, h4') || b);
-            const host = h ? (h.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 35) : '';
-            if (host !== fp.host) return false;
-        }
-        return true;
+        if (fp.txt && txt === fp.txt) s += 5;
+        return s;
     }
+
+    function fpMatch(el, fp) { return fpScore(el, fp) >= 0; }
 
     function describe(el) {
         const cls = Array.from(el.classList).slice(0, 2).join('.');
         const sig = sigOf(el);
         return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '') + ' | ' + sig;
     }
-
     function resolveItem(it) {
         if (!it.fp) {
             const g = safeQuery(it.sel);
             if (!g) return null;
             it.fp = fingerprint(g);
-            if (!it.fp.aid) { it.fp.aid = it.id; g.setAttribute('data-qp-id', it.id); }
+            if (!it.fp.aid) { it.fp.aid = it.id; }
+            g.setAttribute('data-qp-id', it.fp.aid);
             saveItems();
         }
-        if (it._el && it._el.isConnected && fpMatch(it._el, it.fp)) return it._el;
+        if (it._el && it._el.isConnected && fpScore(it._el, it.fp) >= 0) return it._el;
         it._el = null;
 
-        let el = null;
-        if (it.fp.aid) {
-            el = document.querySelector('[data-qp-id="' + it.fp.aid + '"]');
-            if (el && fpMatch(el, it.fp)) { it._el = el; return el; }
-        }
+        let el = it.fp.aid ? document.querySelector('[data-qp-id="' + it.fp.aid + '"]') : null;
+        if (el && el.isConnected && fpScore(el, it.fp) >= 0) { it._el = el; return el; }
+
         if (it.fp.eid) {
             el = document.getElementById(it.fp.eid);
-            if (el && fpMatch(el, it.fp)) {
-                if (!el.getAttribute('data-qp-id')) el.setAttribute('data-qp-id', it.id);
-                it._el = el;
-                return el;
-            }
-            return null;
-        }
-        el = safeQuery(it.sel);
-        if (el && fpMatch(el, it.fp)) {
-            if (!el.getAttribute('data-qp-id')) el.setAttribute('data-qp-id', it.id);
+            if (!el) return null;
+            el.setAttribute('data-qp-id', it.fp.aid || it.id);
             it._el = el;
             return el;
         }
+
+        el = safeQuery(it.sel);
+        if (el && fpScore(el, it.fp) >= 0) {
+            el.setAttribute('data-qp-id', it.fp.aid || it.id);
+            it._el = el;
+            return el;
+        }
+
+        let best = null, bestScore = -1;
         for (const c of document.querySelectorAll(INTERACTIVE)) {
-            if (!fpMatch(c, it.fp)) continue;
-            c.setAttribute('data-qp-id', it.id);
-            it.sel = selectorFor(c);
-            it._el = c;
+            const s = fpScore(c, it.fp);
+            if (s > bestScore) { bestScore = s; best = c; if (s >= 90) break; }
+        }
+        if (best && bestScore >= 0) {
+            best.setAttribute('data-qp-id', it.fp.aid || it.id);
+            it.sel = selectorFor(best);
+            it._el = best;
             saveItems();
-            return c;
+            return best;
         }
         return null;
     }
+
 
     function safeQuery(sel) {
         try { return document.querySelector(sel); } catch (e) { return null; }
@@ -588,7 +614,10 @@
 
     function guessOn(sig) {
         if (sig.indexOf('chk:') === 0) return sig === 'chk:1';
-        const s = ' ' + sig.slice(4).replace(/[-_]/g, ' ').toLowerCase() + ' ';
+        const raw = sig.slice(4);
+        if (/toggle[-_]?on\b/i.test(raw)) return true;
+        if (/toggle[-_]?off\b/i.test(raw)) return false;
+        const s = ' ' + raw.replace(/[-_]/g, ' ').toLowerCase() + ' ';
         if (/ (off|disabled|disable|inactive|closed|hidden|false|no) /.test(s)) return false;
         if (/ (on|enabled|enable|active|checked|open|opened|shown|true|yes) /.test(s)) return true;
         return null;
@@ -612,21 +641,18 @@
 
     function syncStates() {
         if (!listEl) return;
-        Array.from(listEl.children).forEach((chip, i) => {
-            const it = items[i];
-            if (!it) return;
-            const t = resolveItem(it);
-            chip.classList.toggle('qp-missing', !t);
+Array.from(listEl.children).forEach((chip, i) => {
+    const it = items[i];
+    if (!it) return;
+    const t = resolveItem(it);
+    chip.classList.toggle('qp-missing', !t);
+
             const st = stateOf(it, t);
             chip.classList.toggle('qp-tgl', st !== 'none');
             chip.classList.toggle('qp-on', st === 'on');
             chip.classList.toggle('qp-unknown', st === 'unknown');
-            const ms = chip.querySelector('.qp-chip-sel');
-            if (ms && t && t.tagName === 'SELECT' && document.activeElement !== ms) {
-                if (ms.options.length !== t.options.length) { renderList(); return; }
-                ms.value = t.value;
-            }
-        });
+
+});
     }
 
     let mo = null, lastSync = 0, syncPend = null;
