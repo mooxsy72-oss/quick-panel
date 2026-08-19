@@ -31,7 +31,7 @@
     const esc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/[^\w-]/g, '\\$&');
 
     const STATE_CLS = /(^|[-_])(disabled|enabled|active|selected|checked|open|closed|down|up|on|off|lock|unlock|flash|hover)([-_]|$)|openIcon|closedIcon|displayNone|toggleEnabled|openDrawer|closedDrawer|drawer-content|flex(?![-_])/i;
-    const KEY_ATTRS = ['data-pm-identifier', 'data-pm-prompt-id', 'data-id', 'name'];
+    const KEY_ATTRS = ['data-pm-identifier', 'data-pm-prompt-id', 'data-id', 'uid', 'name'];
 
     function selectorFor(el) {
         const parts = [];
@@ -122,6 +122,24 @@
         }
         return opened;
     }
+    function openLorebook(it, done) {
+        const content = document.querySelector('#WorldInfo');
+        const drawerBtn = document.querySelector('#WI-SP-button .drawer-toggle')
+                       || document.querySelector('#WI-SP-button');
+        let wait = 0;
+        if (content && !isVisible(content) && drawerBtn) { drawerBtn.click(); wait = 350; }
+        setTimeout(() => {
+            const ws = document.querySelector('#world_editor_select');
+            let wait2 = 0;
+            if (ws && it.wi !== undefined && ws.value !== it.wi) {
+                ws.value = it.wi;
+                ws.dispatchEvent(new Event('change', { bubbles: true }));
+                try { if (window.jQuery) jQuery(ws).trigger('change'); } catch (e) {}
+                wait2 = 650; // лорбуку нужно время на загрузку записей
+            }
+            setTimeout(done, wait2);
+        }, wait);
+    }
 
     function isDrawerHead(el) {
         if (el.matches('.inline-drawer-toggle, .drawer-toggle, .inline-drawer-header, h3, h4, h5')) return true;
@@ -161,6 +179,13 @@
     function resolveItem(it) {
         let el = safeQuery(it.sel);
         if (el) return el;
+
+        // Приоритет: uid (лорбук)
+        if (it.uid) {
+            el = document.querySelector(`[uid="${it.uid}"]`);
+            if (el) { it.sel = selectorFor(el); saveItems(); return el; }
+        }
+
         const all = document.querySelectorAll(INTERACTIVE);
         if (it.title) {
             for (const c of all) if (c.getAttribute('title') === it.title) { el = c; break; }
@@ -269,16 +294,31 @@
 
     function addItem(el) {
         const sel = selectorFor(el);
-        if (items.some(i => i.sel === sel)) { toast('Уже добавлено'); return; }
-        items.push({
+        const uid = el.getAttribute('uid');
+        const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+
+        // Для uid-элементов (записи лорбука) — дедупликация только по uid
+        if (uid && items.some(i => i.uid === uid)) { toast('Уже добавлено'); return; }
+        // Для остальных — селектор + текст
+        if (!uid && items.some(i => i.sel === sel && i.txt === txt)) { toast('Уже добавлено'); return; }
+
+        const item = {
             id: 'i' + Date.now(), sel,
             name: nameFor(el), icon: iconFor(el),
             title: el.getAttribute('title') || '',
-            txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40)
-        });
+            txt
+        };
+        if (uid) item.uid = uid;
+
+        // Запись лорбука — запоминаем, какой лорбук был открыт при добавлении
+        if (el.closest('#WorldInfo, .world_entry, #world_popup')) {
+            const ws = document.querySelector('#world_editor_select');
+            if (ws) item.wi = ws.value;
+        }
+        items.push(item);
         saveItems();
         renderList();
-        toast('Добавлено: ' + items[items.length - 1].name);
+        toast('Добавлено: ' + item.name);
     }
 
     /* ---------------- ПАНЕЛЬ ---------------- */
@@ -437,11 +477,29 @@
                     startRename(chip, label, it);
                     return;
                 }
-                const t = resolveItem(it);
-                if (!t) { toast('Элемент не найден'); renderList(); return; }
                 chip.classList.remove('qp-flash');
                 void chip.offsetWidth;
                 chip.classList.add('qp-flash');
+                if (it.wi !== undefined) {
+                    openLorebook(it, () => {
+                        let t = resolveItem(it);
+                        if (!t) {
+                            // Лорбук грузится — пробуем ещё раз через 400мс
+                            setTimeout(() => {
+                                t = resolveItem(it);
+                                if (!t) { toast('Запись не найдена в лорбуке'); renderList(); return; }
+                                fire(t);
+                                setTimeout(() => { syncStates(); renderList(); }, 120);
+                            }, 400);
+                            return;
+                        }
+                        fire(t);
+                        setTimeout(() => { syncStates(); renderList(); }, 120);
+                    });
+                    return;
+                }
+                const t = resolveItem(it);
+                if (!t) { toast('Элемент не найден'); renderList(); return; }
                 fire(t);
                 setTimeout(syncStates, 120);
             });
@@ -509,11 +567,18 @@
 
     function placePanel(ignoreSaved) {
         if (isMobile()) {
-            const w = Math.min(220, Math.round(window.innerWidth * 0.62));
-            panel.style.width = w + 'px';
-            if (!panel.style.height) panel.style.height = '260px';
-            panel.style.left = Math.round((window.innerWidth - w) / 2) + 'px';
-            panel.style.top  = Math.round(window.innerHeight * 0.22) + 'px';
+            const mbox = ignoreSaved ? null : lsGet(LS_BOX, null);
+            const w = clamp(mbox?.width  || Math.min(220, Math.round(window.innerWidth * 0.62)), 150, window.innerWidth  - 8);
+            const h = clamp(mbox?.height || 260, 140, window.innerHeight - 8);
+            panel.style.width  = w + 'px';
+            panel.style.height = h + 'px';
+            if (mbox && typeof mbox.left === 'number') {
+                panel.style.left = clamp(mbox.left, 4, window.innerWidth  - w - 4) + 'px';
+                panel.style.top  = clamp(mbox.top,  4, window.innerHeight - h - 4) + 'px';
+            } else {
+                panel.style.left = Math.round((window.innerWidth - w) / 2) + 'px';
+                panel.style.top  = Math.round(window.innerHeight * 0.22) + 'px';
+            }
             return;
         }
         const w = panel.offsetWidth || 190;
@@ -529,7 +594,7 @@
     }
 
     function saveBox() {
-        if (!panel || isMobile()) return;
+        if (!panel) return;
         lsSet(LS_BOX, { left: panel.offsetLeft, top: panel.offsetTop, width: panel.offsetWidth, height: panel.offsetHeight });
     }
 
