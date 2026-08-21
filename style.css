@@ -251,3 +251,152 @@ body.qp-picking { cursor: crosshair !important; }
     background: rgba(224,85,85,.25);
     color: #e05555;
 }
+
+.qp-set-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 2px 4px;
+    position: relative;
+    isolation: isolate;
+    pointer-events: none;
+}
+
+.qp-set-inner > * {
+    pointer-events: auto;
+}
+
+.qp-set-inner label.checkbox_label {
+    position: relative;
+    z-index: 1;
+}
+
+.qp-set-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    position: relative;
+    z-index: 10;
+}
+
+.qp-set-row .menu_button {
+    position: relative;
+    z-index: 15;
+    background: rgba(255,255,255,.08);
+}
+
+.qp-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 2px;
+    cursor: pointer;
+    user-select: none;
+    outline: none;
+}
+.qp-check-box {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.35));
+    background: rgba(0,0,0,.25);
+    transition: background .15s ease, border-color .15s ease;
+}
+.qp-check-box i {
+    font-size: 9px;
+    opacity: 0;
+    transform: scale(.6);
+    transition: opacity .15s ease, transform .15s ease;
+}
+.qp-check.qp-check-on .qp-check-box {
+    background: var(--SmartThemeQuoteColor, #6aa9ff);
+    border-color: var(--SmartThemeQuoteColor, #6aa9ff);
+}
+.qp-check.qp-check-on .qp-check-box i {
+    opacity: 1;
+    transform: none;
+    color: #111;
+}
+.qp-check:hover .qp-check-box {
+    border-color: var(--SmartThemeQuoteColor, #6aa9ff);
+}
+.qp-check:focus-visible {
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px var(--SmartThemeQuoteColor, #6aa9ff);
+}
+.qp-check-lb { line-height: 1.3; }
+
+/* ---------- Папки ---------- */
+
+.qp-folder {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px 6px 4px;
+    margin-top: 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: calc(var(--mainFontSize, 15px) * .76);
+    background: rgba(255,255,255,.03);
+    border: 1px solid transparent;
+    transition: background .15s ease;
+}
+.qp-folder:first-child { margin-top: 0; }
+.qp-folder:hover { background: rgba(255,255,255,.07); }
+.qp-folder-arrow {
+    font-size: 9px; opacity: .55; flex: 0 0 10px; text-align: center;
+    transition: transform .15s ease;
+}
+.qp-folder.qp-folder-collapsed .qp-folder-arrow { transform: rotate(-90deg); }
+.qp-folder-ic { font-size: 11px; opacity: .6; flex: 0 0 12px; text-align: center; }
+.qp-folder-name {
+    flex: 1; font-weight: 600; opacity: .85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.qp-folder-count {
+    font-size: 10px; opacity: .5;
+    padding: 0 5px; border-radius: 8px;
+    background: rgba(255,255,255,.08);
+}
+.qp-folder-tools { display: none; gap: 4px; margin-left: 2px; }
+#qp-panel.qp-editing .qp-folder-tools { display: flex; }
+.qp-folder-tools .qp-t { font-size: 10px; }
+.qp-folder-tools .qp-folder-on:hover  { color: #4ec66f; }
+.qp-folder-tools .qp-folder-off:hover { color: #e05555; }
+.qp-folder-tools .qp-folder-del:hover { color: #ff6b6b; }
+
+/* чипы внутри папки — небольшой отступ слева, чтобы читалась вложенность */
+.qp-chip-nested {
+    margin-left: 10px;
+}
+
+.qp-folder-add {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    margin-bottom: 5px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: calc(var(--mainFontSize, 15px) * .74);
+    opacity: .7;
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(255,255,255,.25));
+    transition: opacity .15s ease, background .15s ease;
+}
+.qp-folder-add:hover { opacity: 1; background: rgba(255,255,255,.06); }
+
+.qp-chip-folder-sel {
+    font-size: 10px;
+    max-width: 68px;
+    color: inherit;
+    background: rgba(0,0,0,.3);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.2));
+    border-radius: 5px;
+    padding: 1px 2px;
+    outline: none;
+    cursor: pointer;
+}
