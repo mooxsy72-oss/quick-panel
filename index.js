@@ -204,6 +204,31 @@
             || /(^|[-_\s])toggle([-_\s]|$)/i.test(el.className || '');
     }
 
+    // Многие кастомные FAB/виджеты (плавающие кнопки с drag-жестом) слушают
+    // pointerdown/pointerup, а не click — синтетический el.click() для них молчит.
+    // Для нативно кликабельных тегов click() достаточен и безопаснее (не дублируем событие).
+    const NATIVE_CLICKABLE = 'button, a, input, select, [role="button"], [role="tab"], [role="menuitem"], [role="option"]';
+
+    function simulateTap(el) {
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const base = {
+            bubbles: true, cancelable: true, composed: true,
+            clientX: cx, clientY: cy, view: window,
+            pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0
+        };
+        try {
+            el.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
+            el.dispatchEvent(new MouseEvent('mousedown',     { ...base, buttons: 1 }));
+            el.dispatchEvent(new PointerEvent('pointerup',   { ...base, buttons: 0 }));
+            el.dispatchEvent(new MouseEvent('mouseup',       { ...base, buttons: 0 }));
+            el.dispatchEvent(new MouseEvent('click',         { ...base, buttons: 0 }));
+        } catch (e) {
+            el.click();
+        }
+    }
+
     function fire(el) {
         // 0. Парные маркеры (ExtBlocks и подобные): кликаем по видимому span'у,
         //    а не по спрятанному — иначе чип работает только в одну сторону
@@ -221,10 +246,13 @@
             return;
         }
 
-        // 3. Всё остальное — клик по выбранному элементу.
+        // 3. Всё остальное. Нативные теги — обычный click().
+        //    Кастомные div/span-кнопки (FAB и т.п.) — полная имитация тапа,
+        //    т.к. они часто слушают pointerdown/pointerup, а не click.
         //    Никакого всплытия к предкам: именно оно било по #extensions-settings-button
         //    и дёргало чужие чекбоксы вместо нужной кнопки.
-        el.click();
+        if (el.matches(NATIVE_CLICKABLE)) el.click();
+        else simulateTap(el);
     }
 
     /* ---------------- ТОСТ ---------------- */
