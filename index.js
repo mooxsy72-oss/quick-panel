@@ -22,13 +22,52 @@
     }
     function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 
+    const LS_FOLDERS = 'qpFolders';
+
     let items = lsGet(LS_ITEMS, []);
-    window.qpDebug = { get items() { return items; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
+    let folders = lsGet(LS_FOLDERS, []); // [{id, name, collapsed}]
+    window.qpDebug = { get items() { return items; }, get folders() { return folders; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
    
     let cfg   = Object.assign({ float: true, wand: true }, lsGet(LS_CFG, {}));
 
-    const saveItems = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
-    const saveCfg   = () => lsSet(LS_CFG, cfg);
+    const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
+    const saveCfg     = () => lsSet(LS_CFG, cfg);
+    const saveFolders = () => lsSet(LS_FOLDERS, folders);
+
+    /* ---------------- ПАПКИ ---------------- */
+
+    function addFolder(name) {
+        const id = 'f' + Date.now();
+        folders.push({ id, name: (name || 'Новая папка').trim().slice(0, 24), collapsed: false });
+        saveFolders();
+        renderList();
+        return id;
+    }
+    function renameFolder(id, name) {
+        const f = folders.find(x => x.id === id);
+        if (f && name && name.trim()) { f.name = name.trim().slice(0, 24); saveFolders(); }
+    }
+    function deleteFolder(id) {
+        items.forEach(it => { if (it.folder === id) it.folder = ''; });
+        folders = folders.filter(f => f.id !== id);
+        saveItems(); saveFolders(); renderList();
+    }
+    function toggleFolderOpen(id) {
+        const f = folders.find(x => x.id === id);
+        if (f) { f.collapsed = !f.collapsed; saveFolders(); renderList(); }
+    }
+    // Массовое вкл/выкл всех тоглов внутри папки
+    function setGroupState(folderId, wantOn) {
+        let touched = 0;
+        items.filter(it => it.folder === folderId).forEach(it => {
+            const t = resolveItem(it);
+            if (!t || !isToggleLike(t)) return;
+            const cur = stateOf(it, t) === 'on';
+            if (cur !== wantOn) { fire(t); touched++; }
+        });
+        toast(touched ? (wantOn ? 'Включаю тоглы группы…' : 'Выключаю тоглы группы…') : 'В папке нет тоглов с известным состоянием');
+        [150, 400, 900].forEach(ms => setTimeout(syncStates, ms));
+    }
 
     /* ---------------- СЕЛЕКТОРЫ ---------------- */
 
@@ -86,6 +125,17 @@
         // Приоритет: кнопка с id важнее обёртки
         let hit = el.closest('button, input, select, a, .menu_button, .inline-drawer-toggle, .drawer-toggle, .inline-drawer-header, h3, h4, h5, [class*="section-toggle"], [class*="section_toggle"]')
                || el.closest(INTERACTIVE);
+
+        // Фолбэк: кастомные кнопки сторонних расширений без семантики (FAB и т.п.,
+        // клик навешан через addEventListener, атрибутов/классов-маркеров нет).
+        // Определяем по cursor:pointer, поднимаясь на пару уровней вверх.
+        if (!hit) {
+            let node = el;
+            for (let i = 0; i < 4 && node && node.nodeType === 1 && node !== document.body; i++) {
+                if (getComputedStyle(node).cursor === 'pointer') { hit = node; break; }
+                node = node.parentElement;
+            }
+        }
         if (!hit) return null;
         const r = hit.getBoundingClientRect();
         if (r.width > window.innerWidth * 0.85 && r.height > window.innerHeight * 0.5) return null;
@@ -296,7 +346,8 @@
             name: nameFor(el),
             icon: iconFor(el),
             title: el.getAttribute('title') || '',
-            txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40)
+            txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
+            folder: ''
         });
         saveItems();
         renderList();
@@ -368,109 +419,194 @@
         renderList();
     }
 
+    // Перемещает it на позицию dir (-1/+1) относительно соседей ВНУТРИ ЕГО ЖЕ ПАПКИ,
+    // а не по глобальному индексу — иначе "выше/ниже" перепрыгивало бы между папками.
+    function moveItem(it, dir) {
+        const group = items.filter(x => (x.folder || '') === (it.folder || ''));
+        const gi = group.indexOf(it);
+        const ni = gi + dir;
+        if (ni < 0 || ni >= group.length) return;
+        const other = group[ni];
+        const ai = items.indexOf(it), bi = items.indexOf(other);
+        items[ai] = other; items[bi] = it;
+        saveItems(); renderList();
+    }
+
+    function buildFolderHeader(f, count) {
+        const head = document.createElement('div');
+        head.className = 'qp-folder' + (f.collapsed ? ' qp-folder-collapsed' : '');
+        head.dataset.qpFolderId = f.id;
+        head.innerHTML =
+            '<i class="fa-solid fa-chevron-down qp-folder-arrow"></i>' +
+            '<i class="fa-solid fa-folder qp-folder-ic"></i>' +
+            '<span class="qp-folder-name"></span>' +
+            '<span class="qp-folder-count"></span>' +
+            '<div class="qp-folder-tools">' +
+                '<i class="fa-solid fa-toggle-on qp-t qp-folder-on" title="Включить все тоглы папки"></i>' +
+                '<i class="fa-solid fa-toggle-off qp-t qp-folder-off" title="Выключить все тоглы папки"></i>' +
+                '<i class="fa-solid fa-pen qp-t qp-folder-ren" title="Переименовать папку"></i>' +
+                '<i class="fa-solid fa-trash qp-t qp-folder-del" title="Удалить папку"></i>' +
+            '</div>';
+        head.querySelector('.qp-folder-name').textContent = f.name;
+        head.querySelector('.qp-folder-count').textContent = count;
+
+        head.addEventListener('click', (e) => {
+            if (e.target.closest('.qp-folder-ren')) {
+                const name = prompt('Название папки', f.name);
+                if (name && name.trim()) renameFolder(f.id, name);
+                renderList();
+                return;
+            }
+            if (e.target.closest('.qp-folder-del')) {
+                if (confirm('Удалить папку «' + f.name + '»? Элементы останутся в списке, просто без папки.')) deleteFolder(f.id);
+                return;
+            }
+            if (e.target.closest('.qp-folder-on'))  { setGroupState(f.id, true);  return; }
+            if (e.target.closest('.qp-folder-off')) { setGroupState(f.id, false); return; }
+            toggleFolderOpen(f.id);
+        });
+        return head;
+    }
+
+    function buildChip(it) {
+        const target = resolveItem(it);
+        const chip = document.createElement('div');
+        chip.className = 'qp-chip' + (target ? '' : ' qp-missing') + (it.folder ? ' qp-chip-nested' : '');
+        chip.dataset.qpItemId = it.id;
+        chip.title = target ? it.name : 'Элемент не найден на странице';
+        const dot = document.createElement('span');
+        dot.className = 'qp-chip-dot';
+        const ic = document.createElement('i');
+        ic.className = it.icon + ' qp-chip-ic';
+        const label = document.createElement('span');
+        label.className = 'qp-chip-lb';
+        label.textContent = it.name;
+        chip.append(dot, ic, label);
+
+        if (target && target.tagName === 'SELECT' && !panel.classList.contains('qp-editing')) {
+            const sel = document.createElement('select');
+            sel.className = 'qp-chip-sel';
+            sel.title = it.name;
+            Array.from(target.options).forEach(o => {
+                const op = document.createElement('option');
+                op.value = o.value; op.textContent = o.textContent;
+                sel.appendChild(op);
+            });
+            sel.value = target.value;
+            ['pointerdown', 'click'].forEach(ev => sel.addEventListener(ev, ev2 => ev2.stopPropagation()));
+            sel.addEventListener('change', (ev2) => {
+                ev2.stopPropagation();
+                const t = resolveItem(it);
+                if (!t) { toast('Элемент не найден'); return; }
+                t.value = sel.value;
+                t.dispatchEvent(new Event('change', { bubbles: true }));
+                t.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+            label.remove();
+            chip.classList.add('qp-has-sel');
+            chip.appendChild(sel);
+        }
+
+        const del = document.createElement('i');
+        del.className = 'fa-solid fa-trash qp-chip-del';
+        del.title = 'Удалить';
+        chip.appendChild(del);
+
+        const tools = document.createElement('div');
+        tools.className = 'qp-chip-tools';
+        tools.innerHTML =
+            '<i class="fa-solid fa-arrow-up qp-t qp-up" title="Выше"></i>' +
+            '<i class="fa-solid fa-arrow-down qp-t qp-dn" title="Ниже"></i>' +
+            '<i class="fa-solid fa-right-left qp-t qp-inv" title="Перевернуть индикатор"></i>' +
+            '<i class="fa-solid fa-circle-info qp-t qp-info" title="Что реально найдено"></i>';
+
+        // Выбор папки — доступен только в режиме редактирования (тулбар и так виден только тогда)
+        const folderSel = document.createElement('select');
+        folderSel.className = 'qp-chip-folder-sel';
+        folderSel.title = 'Переместить в папку';
+        folderSel.innerHTML = '<option value="">— без папки —</option>' +
+            folders.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+        folderSel.value = it.folder || '';
+        ['pointerdown', 'click'].forEach(ev => folderSel.addEventListener(ev, ev2 => ev2.stopPropagation()));
+        folderSel.addEventListener('change', () => {
+            it.folder = folderSel.value;
+            saveItems();
+            renderList();
+        });
+        tools.appendChild(folderSel);
+        chip.appendChild(tools);
+
+        let longTimer = null;
+        chip.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.qp-chip-del, .qp-chip-tools')) return;
+            longTimer = setTimeout(() => {
+                longTimer = null;
+                if (!panel.classList.contains('qp-editing')) startPick();
+            }, LONGPRESS_MS);
+        });
+        ['pointerup', 'pointercancel', 'pointermove'].forEach(ev =>
+            chip.addEventListener(ev, () => clearTimeout(longTimer)));
+
+        chip.addEventListener('click', (e) => {
+            if (e.target.closest('.qp-chip-del')) {
+                items.splice(items.indexOf(it), 1); saveItems(); renderList(); return;
+            }
+            if (panel.classList.contains('qp-editing')) {
+                if (e.target.closest('.qp-up'))  { moveItem(it, -1); return; }
+                if (e.target.closest('.qp-dn'))  { moveItem(it, 1);  return; }
+                if (e.target.closest('.qp-inv')) { it.inv = !it.inv; saveItems(); syncStates(); toast(it.inv ? 'Индикатор перевёрнут' : 'Индикатор как есть'); return; }
+                if (e.target.closest('.qp-info')) { const t = resolveItem(it); toast(t ? describe(t) : 'Элемент не найден'); return; }
+                if (e.target.closest('.qp-chip-folder-sel')) return;
+                if (chip.classList.contains('qp-has-sel')) return;
+                startRename(chip, label, it);
+                return;
+            }
+            if (chip.classList.contains('qp-has-sel')) return;
+            const t = resolveItem(it);
+            if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
+            const before = sigOf(t);
+            chip.classList.remove('qp-flash');
+            void chip.offsetWidth;
+            chip.classList.add('qp-flash');
+            fire(t);
+            [80, 220, 500, 1000, 1800].forEach(ms => setTimeout(() => {
+                const t2 = resolveItem(it);
+                if (t2) learnSig(it, before, sigOf(t2));
+                syncStates();
+            }, ms));
+        });
+
+        return chip;
+    }
+
     function renderList() {
         if (!listEl) return;
         listEl.innerHTML = '';
-        if (!items.length) {
+
+        if (panel.classList.contains('qp-editing')) {
+            const addFolderBtn = document.createElement('div');
+            addFolderBtn.className = 'qp-folder-add';
+            addFolderBtn.innerHTML = '<i class="fa-solid fa-folder-plus"></i> Новая папка';
+            addFolderBtn.addEventListener('click', () => addFolder('Новая папка'));
+            listEl.appendChild(addFolderBtn);
+        }
+
+        if (!items.length && !folders.length) {
             const empty = document.createElement('div');
             empty.className = 'qp-empty';
             empty.textContent = 'Пусто. Включи прицел и кликни любой элемент таверны.';
             listEl.appendChild(empty);
             return;
         }
-        items.forEach((it, idx) => {
-            const target = resolveItem(it);
-            const chip = document.createElement('div');
-            chip.className = 'qp-chip' + (target ? '' : ' qp-missing');
-            chip.title = target ? it.name : 'Элемент не найден на странице';
-            const dot = document.createElement('span');
-            dot.className = 'qp-chip-dot';
-            const ic = document.createElement('i');
-            ic.className = it.icon + ' qp-chip-ic';
-            const label = document.createElement('span');
-            label.className = 'qp-chip-lb';
-            label.textContent = it.name;
-            chip.append(dot, ic, label);
 
-            if (target && target.tagName === 'SELECT' && !panel.classList.contains('qp-editing')) {
-                const sel = document.createElement('select');
-                sel.className = 'qp-chip-sel';
-                sel.title = it.name;
-                Array.from(target.options).forEach(o => {
-                    const op = document.createElement('option');
-                    op.value = o.value; op.textContent = o.textContent;
-                    sel.appendChild(op);
-                });
-                sel.value = target.value;
-                ['pointerdown', 'click'].forEach(ev => sel.addEventListener(ev, ev2 => ev2.stopPropagation()));
-                sel.addEventListener('change', (ev2) => {
-                    ev2.stopPropagation();
-                    const t = resolveItem(it);
-                    if (!t) { toast('Элемент не найден'); return; }
-                    t.value = sel.value;
-                    t.dispatchEvent(new Event('change', { bubbles: true }));
-                    t.dispatchEvent(new Event('input', { bubbles: true }));
-                });
-                label.remove();
-                chip.classList.add('qp-has-sel');
-                chip.appendChild(sel);
-            }
-
-            const del = document.createElement('i');
-            del.className = 'fa-solid fa-trash qp-chip-del';
-            del.title = 'Удалить';
-            chip.appendChild(del);
-
-            const tools = document.createElement('div');
-            tools.className = 'qp-chip-tools';
-            tools.innerHTML =
-                '<i class="fa-solid fa-arrow-up qp-t qp-up" title="Выше"></i>' +
-                '<i class="fa-solid fa-arrow-down qp-t qp-dn" title="Ниже"></i>' +
-                '<i class="fa-solid fa-right-left qp-t qp-inv" title="Перевернуть индикатор"></i>' +
-                '<i class="fa-solid fa-circle-info qp-t qp-info" title="Что реально найдено"></i>';
-            chip.appendChild(tools);
-
-            let longTimer = null;
-            chip.addEventListener('pointerdown', (e) => {
-                if (e.target.closest('.qp-chip-del, .qp-chip-tools')) return;
-                longTimer = setTimeout(() => {
-                    longTimer = null;
-                    if (!panel.classList.contains('qp-editing')) startPick();
-                }, LONGPRESS_MS);
-            });
-            ['pointerup', 'pointercancel', 'pointermove'].forEach(ev =>
-                chip.addEventListener(ev, () => clearTimeout(longTimer)));
-
-            chip.addEventListener('click', (e) => {
-                if (e.target.closest('.qp-chip-del')) {
-                    items.splice(idx, 1); saveItems(); renderList(); return;
-                }
-                if (panel.classList.contains('qp-editing')) {
-                    if (e.target.closest('.qp-up')) { if (idx > 0) { items.splice(idx - 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
-                    if (e.target.closest('.qp-dn')) { if (idx < items.length - 1) { items.splice(idx + 1, 0, items.splice(idx, 1)[0]); saveItems(); renderList(); } return; }
-                    if (e.target.closest('.qp-inv')) { it.inv = !it.inv; saveItems(); syncStates(); toast(it.inv ? 'Индикатор перевёрнут' : 'Индикатор как есть'); return; }
-                    if (e.target.closest('.qp-info')) { const t = resolveItem(it); toast(t ? describe(t) : 'Элемент не найден'); return; }
-                    if (chip.classList.contains('qp-has-sel')) return;
-                    startRename(chip, label, it);
-                    return;
-                }
-                if (chip.classList.contains('qp-has-sel')) return;
-                const t = resolveItem(it);
-                if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
-                const before = sigOf(t);
-                chip.classList.remove('qp-flash');
-                void chip.offsetWidth;
-                chip.classList.add('qp-flash');
-                fire(t);
-                [80, 220, 500, 1000, 1800].forEach(ms => setTimeout(() => {
-                    const t2 = resolveItem(it);
-                    if (t2) learnSig(it, before, sigOf(t2));
-                    syncStates();
-                }, ms));
-            });
-
-            listEl.appendChild(chip);
+        folders.forEach(f => {
+            const group = items.filter(it => it.folder === f.id);
+            listEl.appendChild(buildFolderHeader(f, group.length));
+            if (!f.collapsed) group.forEach(it => listEl.appendChild(buildChip(it)));
         });
+
+        items.filter(it => !it.folder).forEach(it => listEl.appendChild(buildChip(it)));
+
         syncStates();
     }
 
@@ -706,18 +842,17 @@
 
     function syncStates() {
         if (!listEl) return;
-Array.from(listEl.children).forEach((chip, i) => {
-    const it = items[i];
-    if (!it) return;
-    const t = resolveItem(it);
-    chip.classList.toggle('qp-missing', !t);
+        listEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach((chip) => {
+            const it = items.find(x => x.id === chip.dataset.qpItemId);
+            if (!it) return;
+            const t = resolveItem(it);
+            chip.classList.toggle('qp-missing', !t);
 
             const st = stateOf(it, t);
             chip.classList.toggle('qp-tgl', st !== 'none');
             chip.classList.toggle('qp-on', st === 'on');
             chip.classList.toggle('qp-unknown', st === 'unknown');
-
-});
+        });
     }
 
     let mo = null, lastSync = 0, syncPend = null;
@@ -777,8 +912,8 @@ Array.from(listEl.children).forEach((chip, i) => {
         lsSet(boxKey(), { left: panel.offsetLeft, top: panel.offsetTop, width: panel.offsetWidth, height: panel.offsetHeight });
     }
 
-    function openPanel() {
-        if (!panel) buildPanel();
+function openPanel() {
+    if (!panel) buildPanel();
         panel.classList.add('qp-open');
         requestAnimationFrame(() => placePanel(false));
         renderList();
@@ -932,10 +1067,10 @@ Array.from(listEl.children).forEach((chip, i) => {
 
     /* ---------------- НАСТРОЙКИ ---------------- */
 
-    function buildSettings() {
-        const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
-        if (!host) return false;
-        if (document.getElementById('qp-settings')) return true;
+function buildSettings() {
+    const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
+    if (!host) return false;
+    if (document.getElementById('qp-settings')) return true;
 
         const block = document.createElement('div');
         block.id = 'qp-settings';
@@ -950,20 +1085,55 @@ Array.from(listEl.children).forEach((chip, i) => {
         const inner = document.createElement('div');
         inner.className = 'qp-set-inner';
 
-        const mkCheck = (id, text, val) => {
-            const l = document.createElement('label');
-            l.className = 'checkbox_label';
-            l.htmlFor = id;
-            const c = document.createElement('input');
-            c.type = 'checkbox'; c.id = id; c.checked = val;
+        // Свой тоггл без <input> и <label>. Переключается только прямым
+        // кликом по себе — нативной связки label→input больше не существует,
+        // поэтому чужие клики и всплытие до него физически не доберутся.
+        const mkCheck = (id, text, get, set) => {
+            const l = document.createElement('div');
+            l.className = 'qp-check';
+            l.id = id;
+            l.tabIndex = 0;
+            l.setAttribute('role', 'checkbox');
+
+            const box = document.createElement('span');
+            box.className = 'qp-check-box';
+            box.innerHTML = '<i class="fa-solid fa-check"></i>';
+
             const s = document.createElement('span');
+            s.className = 'qp-check-lb';
             s.textContent = text;
-            l.appendChild(c); l.appendChild(s);
-            return { label: l, input: c };
+
+            l.append(box, s);
+
+            const sync = () => {
+                const on = !!get();
+                l.classList.toggle('qp-check-on', on);
+                l.setAttribute('aria-checked', on ? 'true' : 'false');
+            };
+
+            const flip = (e) => {
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                set(!get());
+                sync();
+            };
+
+            l.addEventListener('click', flip);
+            l.addEventListener('keydown', (e) => {
+                if (e.key === ' ' || e.key === 'Enter') flip(e);
+            });
+
+            sync();
+            return { label: l, sync };
         };
 
-        const cFloat = mkCheck('qp-cfg-float', 'Плавающая кнопка', cfg.float);
-        const cWand  = mkCheck('qp-cfg-wand',  'Пункт в меню палочки', cfg.wand);
+        const cFloat = mkCheck('qp-cfg-float', 'Плавающая кнопка',
+            () => cfg.float,
+            (v) => { cfg.float = v; saveCfg(); applyFloat(); }
+        );
+        const cWand = mkCheck('qp-cfg-wand', 'Пункт в меню палочки',
+            () => cfg.wand,
+            (v) => { cfg.wand = v; saveCfg(); mountWand(); }
+        );
 
         const row = document.createElement('div');
         row.className = 'qp-set-row';
@@ -995,24 +1165,31 @@ Array.from(listEl.children).forEach((chip, i) => {
             block.classList.toggle('qp-set-open');
         }, true);
 
-        cFloat.input.addEventListener('change', () => { cfg.float = cFloat.input.checked; saveCfg(); applyFloat(); });
-        cWand.input.addEventListener('change',  () => { cfg.wand  = cWand.input.checked;  saveCfg(); mountWand(); });
+        const syncChecks = () => { cFloat.sync(); cWand.sync(); };
+        const guard = (fn) => (e) => {
+            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+            fn();
+            syncChecks();
+            setTimeout(syncChecks, 0);
+            setTimeout(syncChecks, 120);
+        };
 
-        bOpen.addEventListener('click', () => togglePanel());
-        bPick.addEventListener('click', () => startPick());
-        bReset.addEventListener('click', () => {
+        bOpen.addEventListener('click', guard(() => togglePanel()));
+        bPick.addEventListener('click', guard(() => startPick()));
+        bReset.addEventListener('click', guard(() => {
             try { localStorage.removeItem(LS_BTNPOS); localStorage.removeItem(LS_BOX_D); localStorage.removeItem(LS_BOX_M); } catch (e) {}
             const w = btn.offsetWidth || 42;
             btn.style.left = (window.innerWidth - w - 14) + 'px';
             btn.style.top  = Math.round(window.innerHeight * 0.5) + 'px';
             if (panel) { panel.style.width = '190px'; panel.style.height = '230px'; requestAnimationFrame(() => placePanel(true)); }
-        });
-        bClear.addEventListener('click', () => {
+        }));
+        bClear.addEventListener('click', guard(() => {
             items = []; saveItems(); renderList(); toast('Список очищен');
-        });
+        }));
 
-        return true;
-    }
+    return true;
+}
+
 
     /* ---------------- СТАРТ ---------------- */
 
