@@ -1,24 +1,26 @@
+:root { --qp-accent: var(--SmartThemeQuoteColor, #6aa9ff); }
+
 #qp-btn {
     position: fixed;
     z-index: 10000;
-    width: 42px;
-    height: 42px;
+    width: 34px;
+    height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 12px;
+    border-radius: 10px;
     cursor: pointer;
     touch-action: none;
-    color: var(--SmartThemeBodyColor, #ddd);
+    color: var(--qp-accent);
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 82%, transparent);
-    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.16));
-    box-shadow: 0 6px 18px rgba(0,0,0,.38);
+    border: 1.5px solid var(--qp-accent);
+    box-shadow: 0 4px 12px rgba(0,0,0,.34), 0 0 7px color-mix(in srgb, var(--qp-accent) 30%, transparent);
     backdrop-filter: blur(10px);
     transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
 }
-#qp-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.46); }
+#qp-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.44), 0 0 11px color-mix(in srgb, var(--qp-accent) 45%, transparent); }
 #qp-btn.qp-press { transform: scale(.92); }
-#qp-btn i { font-size: 17px; opacity: .9; }
+#qp-btn i { font-size: 15px; color: var(--qp-accent); }
 .qp-hidden { display: none !important; }
 
 #qp-panel {
@@ -171,8 +173,6 @@ body.qp-picking { cursor: crosshair !important; }
     backdrop-filter: blur(10px);
     transition: opacity .2s ease, transform .2s ease;
 }
-#qp-toast.qp-show { opacity: 1; transform: translate(-50%, 0); }
-
 #qp-toast.qp-show { opacity: 1; transform: translate(-50%, 0); }
 
 #qp-settings .inline-drawer-content { display: none; }
@@ -389,14 +389,127 @@ body.qp-picking { cursor: crosshair !important; }
 }
 .qp-folder-add:hover { opacity: 1; background: rgba(255,255,255,.06); }
 
+
+/* ---------- Режим редактирования: компактно ---------- */
+
+.qp-chip-grip { display: none; font-size: 11px; opacity: .45; flex: 0 0 10px; text-align: center; }
+#qp-panel.qp-editing .qp-chip-grip { display: block; }
+#qp-panel.qp-editing .qp-chip .qp-chip-dot,
+#qp-panel.qp-editing .qp-chip .qp-chip-ic { display: none; }
+#qp-panel.qp-editing .qp-chip { gap: 6px; padding-right: 5px; cursor: grab; }
+#qp-panel.qp-editing .qp-chip-lb { min-width: 30px; }
+#qp-panel.qp-editing .qp-chip-tools { gap: 2px; flex: 0 0 auto; }
+#qp-panel.qp-editing .qp-chip:hover { transform: none; }
+#qp-panel.qp-editing .qp-folder-count { display: none; }
+#qp-panel.qp-editing .qp-folder { cursor: grab; }
+.qp-folder-name { min-width: 30px; }
+.qp-folder-tools { flex: 0 0 auto; }
+
+/* Выбор папки: видна только иконка, нативный select прозрачно поверх */
+.qp-fold-pick { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.qp-fold-pick.qp-fold-set { opacity: .9; color: var(--SmartThemeQuoteColor, #6aa9ff); }
 .qp-chip-folder-sel {
-    font-size: 10px;
-    max-width: 68px;
-    color: inherit;
-    background: rgba(0,0,0,.3);
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    opacity: 0; cursor: pointer;
+    font-size: 16px; /* иначе iOS зумит страницу при открытии */
+    margin: 0; padding: 0; border: 0;
+}
+
+/* Во время редактирования долгий тап не должен выделять текст / вызывать меню */
+#qp-panel.qp-editing .qp-list {
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    padding-bottom: 22px; /* зона, куда можно бросить «в конец без папки» */
+}
+#qp-panel.qp-editing .qp-rename { -webkit-user-select: text; user-select: text; }
+
+/* ---------- Перетаскивание ---------- */
+
+body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-select: none !important; }
+.qp-ghost {
+    position: fixed !important;
+    z-index: 10070;
+    pointer-events: none;
+    margin: 0 !important;
+    opacity: .92;
+    color: var(--SmartThemeBodyColor, #ddd);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 94%, transparent) !important;
+    border: 1px solid var(--SmartThemeQuoteColor, #6aa9ff) !important;
+    box-shadow: 0 10px 26px rgba(0,0,0,.5);
+    transform: scale(1.03) !important;
+}
+.qp-ghost .qp-chip-tools, .qp-ghost .qp-folder-tools, .qp-ghost .qp-chip-del { display: none !important; }
+.qp-ghost .qp-chip-grip { display: block; }
+.qp-drag-src { opacity: .28; }
+.qp-drop-before { box-shadow: 0 -2px 0 0 var(--SmartThemeQuoteColor, #6aa9ff); }
+.qp-drop-after  { box-shadow: 0  2px 0 0 var(--SmartThemeQuoteColor, #6aa9ff); }
+.qp-drop-into {
+    border-color: var(--SmartThemeQuoteColor, #6aa9ff) !important;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #6aa9ff) 18%, transparent);
+}
+.qp-list.qp-drop-end { box-shadow: inset 0 -2px 0 0 var(--SmartThemeQuoteColor, #6aa9ff); }
+#qp-panel.qp-dnd .qp-chip, #qp-panel.qp-dnd .qp-folder { transition: none; }
+
+@media (max-width: 760px) {
+    #qp-btn { width: 32px; height: 32px; }
+    #qp-panel.qp-editing .qp-chip { padding: 7px 4px 7px 6px; }
+    #qp-panel.qp-editing .qp-t { font-size: 12px; padding: 4px; }
+    #qp-panel.qp-editing .qp-chip-del { padding: 4px; font-size: 11px; }
+    #qp-panel.qp-editing .qp-folder-tools { gap: 1px; }
+}
+
+/* ---------- Настройки: иконка и цвет ---------- */
+
+.qp-set-block { display: flex; flex-direction: column; gap: 6px; }
+.qp-set-cap { font-size: .9em; opacity: .75; }
+.qp-ico-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
+    gap: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+    padding: 2px;
+}
+.qp-ico-opt {
+    height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; cursor: pointer;
+    font-size: 15px; opacity: .7;
+    border: 1px solid transparent;
+    background: rgba(255,255,255,.04);
+    transition: opacity .15s ease, background .15s ease, border-color .15s ease;
+}
+.qp-ico-opt:hover { opacity: 1; background: rgba(255,255,255,.1); }
+.qp-ico-opt.qp-sel {
+    opacity: 1;
+    color: var(--qp-accent);
+    border-color: var(--qp-accent);
+    background: color-mix(in srgb, var(--qp-accent) 14%, transparent);
+}
+.qp-ico-custom-row { display: flex; gap: 6px; align-items: center; }
+.qp-ico-custom { flex: 1; min-width: 0; margin: 0 !important; }
+.qp-ico-custom-row .menu_button { margin: 0; flex: 0 0 auto; }
+
+.qp-acc-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.qp-acc-opt {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 9px 4px 6px;
+    border-radius: 999px; cursor: pointer;
+    font-size: .9em;
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.2));
-    border-radius: 5px;
-    padding: 1px 2px;
-    outline: none;
-    cursor: pointer;
+    background: rgba(255,255,255,.04);
+    transition: border-color .15s ease, background .15s ease;
+}
+.qp-acc-opt:hover { background: rgba(255,255,255,.1); }
+.qp-acc-opt.qp-sel { border-color: var(--qp-accent); background: color-mix(in srgb, var(--qp-accent) 14%, transparent); }
+.qp-acc-sw {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.35);
+    flex: 0 0 12px;
+}
+.qp-acc-picker {
+    width: 32px; height: 26px; padding: 0;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.2));
+    border-radius: 6px; background: transparent; cursor: pointer;
 }

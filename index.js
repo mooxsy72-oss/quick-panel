@@ -28,7 +28,7 @@
     let folders = lsGet(LS_FOLDERS, []); // [{id, name, collapsed}]
     window.qpDebug = { get items() { return items; }, get folders() { return folders; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
    
-    let cfg   = Object.assign({ float: true, wand: true }, lsGet(LS_CFG, {}));
+    let cfg   = Object.assign({ float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff' }, lsGet(LS_CFG, {}));
 
     const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
     const saveCfg     = () => lsSet(LS_CFG, cfg);
@@ -60,6 +60,11 @@
     function setGroupState(folderId, wantOn) {
         let touched = 0;
         items.filter(it => it.folder === folderId).forEach(it => {
+            if (it.ad) {
+                const st = adState(it);
+                if (st !== 'missing' && (st === 'on') !== wantOn) { adFire(it); touched++; }
+                return;
+            }
             const t = resolveItem(it);
             if (!t || !isToggleLike(t)) return;
             const cur = stateOf(it, t) === 'on';
@@ -137,6 +142,7 @@
             }
         }
         if (!hit) return null;
+        hit = promoteListItem(hit);
         const r = hit.getBoundingClientRect();
         if (r.width > window.innerWidth * 0.85 && r.height > window.innerHeight * 0.5) return null;
         if (hit.tagName === 'LABEL') {
@@ -145,6 +151,44 @@
         }
         return hit;
     }
+
+    // Повторяющийся элемент списка (пресеты стилей, карточки и т.п.):
+    // у родителя >=2 соседа с тем же тегом и тем же набором стабильных классов.
+    function isListItem(el) {
+        const p = el && el.parentElement;
+        if (!p || el === document.body) return false;
+        const c = stableCls(el);
+        if (!c) return false;
+        let n = 0;
+        for (const sib of p.children) {
+            if (sib.tagName === el.tagName && stableCls(sib) === c && ++n >= 2) return true;
+        }
+        return false;
+    }
+
+    // Кастомные списки (div-карточки без семантики): если кликнули во внутренний
+    // текст/блок карточки, поднимаемся до самой карточки. Иконки и нативные
+    // кнопки внутри карточки (звёздочка и т.п.) не трогаем — их выбирают намеренно.
+    function promoteListItem(hit) {
+        if (hit.matches(NATIVE_CLICKABLE + ', label, i[class*="fa-"], span[class*="fa-"]')) return hit;
+        if (isListItem(hit)) return hit;
+        let node = hit.parentElement;
+        for (let i = 0; i < 5 && node && node !== document.body; i++) {
+            if (node.closest(OWN)) break;
+            if (isListItem(node)) {
+                let cur = 'auto';
+                try { cur = getComputedStyle(node).cursor; } catch (e) {}
+                const r = node.getBoundingClientRect();
+                if (cur === 'pointer' && !(r.width > window.innerWidth * 0.85 && r.height > window.innerHeight * 0.5)) return node;
+                break;
+            }
+            node = node.parentElement;
+        }
+        return hit;
+    }
+
+    const txtOf  = (el) => (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    const txtKey = (t) => String(t || '').replace(/\d+/g, '#');
 
     function nameFor(el) {
         const lbl = el.closest('label');
@@ -354,7 +398,106 @@
         if (e.key === 'Escape') { e.preventDefault(); stopPick(); toast('Отменено'); }
     }
 
+    /* ---------------- АДАПТЕРЫ (элементы, которые кликом не переключить) ---------------- */
+    // Некоторые расширения рисуют карточки, на которые синтетический клик не действует.
+    // Для них чип меняет настройку напрямую — работает, даже если список сейчас не отрисован.
+
+    function stCtx() { try { return SillyTavern.getContext(); } catch (e) { return null; } }
+    const normSp = (t) => String(t || '').trim().replace(/\s+/g, ' ');
+
+    const ADAPTERS = {
+        // Inline Image Generation — пресеты стилей
+        iigStyle: {
+            card: '.iig-style-item',
+            icon: 'fa-solid fa-palette',
+            cfg() { const c = stCtx(); return c && c.extensionSettings && c.extensionSettings.inline_image_gen || null; },
+            list() { const c = this.cfg(); return c && Array.isArray(c.styles) ? c.styles : []; },
+            keyOf(card) {
+                const styles = this.list();
+                if (!styles.length) return '';
+                // 1) id стиля в любом атрибуте карточки
+                for (const a of card.attributes) {
+                    const hit = styles.find(s => s.id === a.value);
+                    if (hit) return hit.id;
+                }
+                // 2) по названию: текст карточки начинается с имени стиля (берём самое длинное совпадение)
+                const txt = normSp(card.textContent);
+                let best = null;
+                for (const s of styles) {
+                    const n = normSp(s.name);
+                    if (n && txt.startsWith(n) && (!best || n.length > best.n.length)) best = { id: s.id, n };
+                }
+                return best ? best.id : '';
+            },
+            nameOf(key) { const s = this.list().find(x => x.id === key); return s ? s.name : ''; },
+            exists(key) { return this.list().some(x => x.id === key); },
+            isOn(key) { const c = this.cfg(); return !!c && c.activeStyleId === key; },
+            toggle(key) {
+                const c = this.cfg();
+                if (!c) return false;
+                c.activeStyleId = c.activeStyleId === key ? '' : key;
+                const ctx = stCtx();
+                try { ctx.saveSettingsDebounced(); } catch (e) {}
+                this.repaint();
+                return c.activeStyleId === key;
+            },
+            // Подсветить активную карточку в настройках расширения, если список сейчас открыт
+            repaint() {
+                const c = this.cfg();
+                document.querySelectorAll(this.card).forEach(card => {
+                    const on = !!c && this.keyOf(card) === c.activeStyleId && !!c.activeStyleId;
+                    card.classList.toggle('iig-style-item-active', on);
+                });
+            }
+        }
+    };
+
+    const AD_SKIP = /star|fav|heart|trash|delete|remove|edit|pen|copy|dup|clone|tag/i;
+    function adapterFor(el) {
+        if (!el || !el.closest) return null;
+        for (const [id, ad] of Object.entries(ADAPTERS)) {
+            const card = el.closest(ad.card);
+            if (!card) continue;
+            if (el !== card) {
+                // звёздочку, корзину и т.п. внутри карточки оставляем обычными кнопками
+                const ctl = el.closest('button, [role="button"]') || el;
+                if (AD_SKIP.test(String(el.className || '')) || AD_SKIP.test(String(ctl.className || '')) || AD_SKIP.test(ctl.getAttribute('title') || '')) return null;
+            }
+            return { id, ad, card };
+        }
+        return null;
+    }
+
+    function adState(it) {
+        const ad = ADAPTERS[it.ad];
+        if (!ad || !ad.exists(it.key)) return 'missing';
+        const on = ad.isOn(it.key);
+        return (it.inv ? !on : on) ? 'on' : 'off';
+    }
+
+    function adFire(it) {
+        const ad = ADAPTERS[it.ad];
+        if (!ad || !ad.exists(it.key)) { toast('Стиль не найден — возможно, удалён'); return; }
+        const on = ad.toggle(it.key);
+        toast((on ? 'Стиль включён: ' : 'Стиль выключен: ') + ad.nameOf(it.key));
+    }
+
     function addItem(el) {
+        const hitAd = adapterFor(el);
+        if (hitAd) {
+            const key = hitAd.ad.keyOf(hitAd.card);
+            if (key) {
+                if (items.some(i => i.ad === hitAd.id && i.key === key)) { toast('Уже добавлено'); return; }
+                items.push({
+                    id: 'i' + Date.now(), ad: hitAd.id, key, sel: '', fp: null,
+                    name: (hitAd.ad.nameOf(key) || nameFor(el)).slice(0, 24),
+                    icon: hitAd.ad.icon, folder: ''
+                });
+                saveItems(); renderList();
+                toast('Добавлено: ' + items[items.length - 1].name);
+                return;
+            }
+        }
         const sel = selectorFor(el);
         const eid = el.id || '';
         if (items.some(i => i.fp && i.fp.eid && i.fp.eid === eid && eid)) {
@@ -406,6 +549,9 @@
          ['pointerdown', 'mousedown', 'click', 'touchstart'].forEach(ev =>
             panel.addEventListener(ev, (e) => e.stopPropagation()));       
         listEl = panel.querySelector('.qp-list');
+        listEl.addEventListener('contextmenu', (e) => {
+            if (panel.classList.contains('qp-editing')) e.preventDefault();
+        });
         const pinned = lsGet('qpPinned', false);
         if (pinned) panel.classList.add('qp-pinned');
 
@@ -429,6 +575,7 @@
         });
 
         panel.querySelector('.qp-edit').addEventListener('click', () => {
+            cancelDrag();
             panel.classList.toggle('qp-editing');
             renderList();
         });
@@ -442,22 +589,232 @@
             requestAnimationFrame(() => placePanel(true));
         });
 
+        applyLook();
         makeDraggable(panel, panel.querySelector('.qp-head'));
         makeResizable(panel, panel.querySelector('.qp-grip'));
         renderList();
     }
 
-    // Перемещает it на позицию dir (-1/+1) относительно соседей ВНУТРИ ЕГО ЖЕ ПАПКИ,
-    // а не по глобальному индексу — иначе "выше/ниже" перепрыгивало бы между папками.
-    function moveItem(it, dir) {
-        const group = items.filter(x => (x.folder || '') === (it.folder || ''));
-        const gi = group.indexOf(it);
-        const ni = gi + dir;
-        if (ni < 0 || ni >= group.length) return;
-        const other = group[ni];
-        const ai = items.indexOf(it), bi = items.indexOf(other);
-        items[ai] = other; items[bi] = it;
-        saveItems(); renderList();
+    /* ---------------- ПЕРЕТАСКИВАНИЕ (режим редактирования) ---------------- */
+    // Телефон: зажать ~0.4с и тянуть. Мышь: просто потянуть чуть дальше порога.
+
+    const DND_HOLD_MS = 380;
+    const NO_DRAG = '.qp-chip-del, .qp-chip-tools, .qp-folder-tools, .qp-rename, select, input';
+    let dnd = null;          // текущее состояние
+    let dndEndedAt = 0;      // чтобы гасить click сразу после перетаскивания
+    let dndGlobalsBound = false;
+
+    const justDragged = () => Date.now() - dndEndedAt < 400;
+    const isEditing = () => panel && panel.classList.contains('qp-editing');
+
+    function armDrag(el, kind, id) {
+        bindDndGlobals();
+        el.addEventListener('touchstart', (e) => {
+            if (!isEditing() || e.touches.length !== 1 || e.target.closest(NO_DRAG)) return;
+            cancelDrag();
+            const t = e.touches[0];
+            const st = dnd = { kind, id, src: el, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, mode: 'touch', active: false };
+            st.timer = setTimeout(() => { if (dnd === st) beginDrag(st); }, DND_HOLD_MS);
+        }, { passive: true });
+        el.addEventListener('pointerdown', (e) => {
+            if (e.pointerType !== 'mouse' || e.button !== 0 || !isEditing() || e.target.closest(NO_DRAG)) return;
+            cancelDrag();
+            dnd = { kind, id, src: el, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, mode: 'mouse', active: false };
+        });
+    }
+
+    function bindDndGlobals() {
+        if (dndGlobalsBound) return;
+        dndGlobalsBound = true;
+
+        document.addEventListener('touchmove', (e) => {
+            if (!dnd || dnd.mode !== 'touch') return;
+            const t = e.touches[0];
+            if (!dnd.active) {
+                // палец поехал до срабатывания зажатия — это обычный скролл
+                if (Math.hypot(t.clientX - dnd.sx, t.clientY - dnd.sy) > 10) cancelDrag();
+                return;
+            }
+            if (e.cancelable) e.preventDefault();
+            moveDrag(t.clientX, t.clientY);
+        }, { passive: false, capture: true });
+        document.addEventListener('touchend',    () => { if (dnd && dnd.mode === 'touch') finishDrag(true);  }, true);
+        document.addEventListener('touchcancel', () => { if (dnd && dnd.mode === 'touch') finishDrag(false); }, true);
+
+        document.addEventListener('pointermove', (e) => {
+            if (!dnd || dnd.mode !== 'mouse') return;
+            if (!dnd.active) {
+                if (Math.hypot(e.clientX - dnd.sx, e.clientY - dnd.sy) < 6) return;
+                beginDrag(dnd);
+            }
+            e.preventDefault();
+            moveDrag(e.clientX, e.clientY);
+        }, true);
+        document.addEventListener('pointerup', (e) => {
+            if (dnd && dnd.mode === 'mouse') finishDrag(true);
+        }, true);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && dnd && dnd.active) { e.stopPropagation(); finishDrag(false); }
+        }, true);
+    }
+
+    function beginDrag(st) {
+        if (!st.src.isConnected) { cancelDrag(); return; }
+        st.active = true;
+        const r = st.src.getBoundingClientRect();
+        st.offX = st.x - r.left;
+        st.offY = st.y - r.top;
+        const g = st.ghost = st.src.cloneNode(true);
+        g.classList.add('qp-ghost');
+        g.removeAttribute('data-qp-item-id');
+        g.removeAttribute('data-qp-folder-id');
+        g.style.width = r.width + 'px';
+        g.style.left = r.left + 'px';
+        g.style.top = r.top + 'px';
+        document.body.appendChild(g);
+
+        st.src.classList.add('qp-drag-src');
+        if (st.kind === 'folder') {
+            listEl.querySelectorAll('.qp-chip').forEach(c => {
+                if (c.dataset.qpFolder === st.id) c.classList.add('qp-drag-src');
+            });
+        }
+        panel.classList.add('qp-dnd');
+        document.body.classList.add('qp-dnd-active');
+        try { navigator.vibrate && navigator.vibrate(12); } catch (e) {}
+
+        const body = panel.querySelector('.qp-body');
+        st.scrollIv = setInterval(() => {
+            const br = body.getBoundingClientRect();
+            const edge = 32;
+            let d = 0;
+            if (st.y < br.top + edge) d = -Math.ceil((br.top + edge - st.y) / 4);
+            else if (st.y > br.bottom - edge) d = Math.ceil((st.y - (br.bottom - edge)) / 4);
+            if (d) { body.scrollTop += d; computeDrop(st); }
+        }, 16);
+        moveDrag(st.x, st.y);
+    }
+
+    function moveDrag(x, y) {
+        const st = dnd;
+        if (!st || !st.active) return;
+        st.x = x; st.y = y;
+        st.ghost.style.left = (x - st.offX) + 'px';
+        st.ghost.style.top  = (y - st.offY) + 'px';
+        computeDrop(st);
+    }
+
+    function clearDropMarks() {
+        if (!listEl) return;
+        listEl.querySelectorAll('.qp-drop-before, .qp-drop-after, .qp-drop-into')
+            .forEach(n => n.classList.remove('qp-drop-before', 'qp-drop-after', 'qp-drop-into'));
+        listEl.classList.remove('qp-drop-end');
+    }
+
+    function computeDrop(st) {
+        clearDropMarks();
+        st.target = null;
+        const hitEl = document.elementFromPoint(st.x, st.y);
+        const body = panel.querySelector('.qp-body');
+        if (!hitEl || !body.contains(hitEl)) return;
+
+        const node = hitEl.closest('.qp-chip[data-qp-item-id], .qp-folder[data-qp-folder-id]');
+        const lastOfFolder = (fid) => {
+            const arr = listEl.querySelectorAll('.qp-chip[data-qp-folder="' + fid + '"]');
+            return arr.length ? arr[arr.length - 1] : listEl.querySelector('.qp-folder[data-qp-folder-id="' + fid + '"]');
+        };
+        const firstRoot = () => listEl.querySelector('.qp-chip[data-qp-folder=""]');
+
+        if (st.kind === 'item') {
+            if (!node) { st.target = { type: 'end' }; listEl.classList.add('qp-drop-end'); return; }
+            if (node === st.src) return;
+            if (node.classList.contains('qp-folder')) {
+                st.target = { type: 'folder', id: node.dataset.qpFolderId };
+                node.classList.add('qp-drop-into');
+                return;
+            }
+            const r = node.getBoundingClientRect();
+            const after = st.y > r.top + r.height / 2;
+            st.target = { type: 'item', id: node.dataset.qpItemId, after };
+            node.classList.add(after ? 'qp-drop-after' : 'qp-drop-before');
+            return;
+        }
+
+        // перетаскиваем папку
+        let fid = null, after = false;
+        if (node && node.classList.contains('qp-folder')) {
+            fid = node.dataset.qpFolderId;
+            const r = node.getBoundingClientRect();
+            after = st.y > r.top + r.height / 2;
+        } else if (node && node.dataset.qpFolder) {
+            fid = node.dataset.qpFolder; after = true;      // над чипом чужой папки = после этой папки
+        }
+        if (fid === st.id) return;
+        if (fid) {
+            st.target = { type: 'folder', id: fid, after };
+            const head = listEl.querySelector('.qp-folder[data-qp-folder-id="' + fid + '"]');
+            if (after) lastOfFolder(fid).classList.add('qp-drop-after');
+            else head.classList.add('qp-drop-before');
+        } else {
+            st.target = { type: 'end' };                     // корневые чипы / пустое место = в конец папок
+            const fr = firstRoot();
+            if (fr) fr.classList.add('qp-drop-before'); else listEl.classList.add('qp-drop-end');
+        }
+    }
+
+    function cancelDrag() { finishDrag(false); }
+
+    function finishDrag(commit) {
+        const st = dnd;
+        if (!st) return;
+        dnd = null;
+        clearTimeout(st.timer);
+        if (!st.active) return;
+        clearInterval(st.scrollIv);
+        if (st.ghost) st.ghost.remove();
+        clearDropMarks();
+        if (panel) panel.classList.remove('qp-dnd');
+        document.body.classList.remove('qp-dnd-active');
+        listEl && listEl.querySelectorAll('.qp-drag-src').forEach(n => n.classList.remove('qp-drag-src'));
+        dndEndedAt = Date.now();
+        if (commit && st.target) {
+            if (st.kind === 'item') dropItem(st.id, st.target);
+            else dropFolder(st.id, st.target);
+        }
+        renderList();
+    }
+
+    function dropItem(id, tgt) {
+        const it = items.find(x => x.id === id);
+        if (!it) return;
+        const from = items.indexOf(it);
+        items.splice(from, 1);
+        if (tgt.type === 'item') {
+            const other = items.find(x => x.id === tgt.id);
+            if (!other) { items.splice(from, 0, it); return; }
+            it.folder = other.folder || '';
+            items.splice(items.indexOf(other) + (tgt.after ? 1 : 0), 0, it);
+        } else if (tgt.type === 'folder') {
+            it.folder = tgt.id;
+            const f = folders.find(x => x.id === tgt.id);
+            if (f && f.collapsed) { f.collapsed = false; saveFolders(); }
+            const first = items.findIndex(x => x.folder === tgt.id);
+            items.splice(first < 0 ? items.length : first, 0, it);
+        } else {
+            it.folder = '';
+            items.push(it);
+        }
+        saveItems();
+    }
+
+    function dropFolder(id, tgt) {
+        const f = folders.find(x => x.id === id);
+        if (!f) return;
+        folders.splice(folders.indexOf(f), 1);
+        const ti = tgt.type === 'folder' ? folders.findIndex(x => x.id === tgt.id) : -1;
+        if (ti >= 0) folders.splice(ti + (tgt.after ? 1 : 0), 0, f);
+        else folders.push(f);
+        saveFolders();
     }
 
     function buildFolderHeader(f, count) {
@@ -478,7 +835,9 @@
         head.querySelector('.qp-folder-name').textContent = f.name;
         head.querySelector('.qp-folder-count').textContent = count;
 
+        armDrag(head, 'folder', f.id);
         head.addEventListener('click', (e) => {
+            if (justDragged()) return;
             if (e.target.closest('.qp-folder-ren')) {
                 const name = prompt('Название папки', f.name);
                 if (name && name.trim()) renameFolder(f.id, name);
@@ -498,18 +857,22 @@
 
     function buildChip(it) {
         const target = resolveItem(it);
+        const present = it.ad ? adState(it) !== 'missing' : !!target;
         const chip = document.createElement('div');
-        chip.className = 'qp-chip' + (target ? '' : ' qp-missing') + (it.folder ? ' qp-chip-nested' : '');
+        chip.className = 'qp-chip' + (present ? '' : ' qp-missing') + (it.folder ? ' qp-chip-nested' : '');
         chip.dataset.qpItemId = it.id;
-        chip.title = target ? it.name : 'Элемент не найден на странице';
+        chip.title = present ? it.name : 'Элемент не найден на странице';
         const dot = document.createElement('span');
         dot.className = 'qp-chip-dot';
         const ic = document.createElement('i');
         ic.className = it.icon + ' qp-chip-ic';
+        const grip = document.createElement('i');
+        grip.className = 'fa-solid fa-grip-vertical qp-chip-grip';
         const label = document.createElement('span');
         label.className = 'qp-chip-lb';
         label.textContent = it.name;
-        chip.append(dot, ic, label);
+        chip.append(grip, dot, ic, label);
+        chip.dataset.qpFolder = it.folder || '';
 
         if (target && target.tagName === 'SELECT' && !panel.classList.contains('qp-editing')) {
             const sel = document.createElement('select');
@@ -543,8 +906,6 @@
         const tools = document.createElement('div');
         tools.className = 'qp-chip-tools';
         tools.innerHTML =
-            '<i class="fa-solid fa-arrow-up qp-t qp-up" title="Выше"></i>' +
-            '<i class="fa-solid fa-arrow-down qp-t qp-dn" title="Ниже"></i>' +
             '<i class="fa-solid fa-right-left qp-t qp-inv" title="Перевернуть индикатор"></i>' +
             '<i class="fa-solid fa-circle-info qp-t qp-info" title="Что реально найдено"></i>';
 
@@ -561,8 +922,15 @@
             saveItems();
             renderList();
         });
-        tools.appendChild(folderSel);
+        // Компактно: видна только иконка папки, а нативный select прозрачно лежит поверх неё
+        const folderPick = document.createElement('span');
+        folderPick.className = 'qp-t qp-fold-pick' + (it.folder ? ' qp-fold-set' : '');
+        folderPick.title = 'Переместить в папку';
+        folderPick.innerHTML = '<i class="fa-solid fa-folder-open"></i>';
+        folderPick.appendChild(folderSel);
+        tools.appendChild(folderPick);
         chip.appendChild(tools);
+        armDrag(chip, 'item', it.id);
 
         let longTimer = null;
         chip.addEventListener('pointerdown', (e) => {
@@ -576,20 +944,27 @@
             chip.addEventListener(ev, () => clearTimeout(longTimer)));
 
         chip.addEventListener('click', (e) => {
+            if (justDragged()) { e.preventDefault(); return; }
             if (e.target.closest('.qp-chip-del')) {
                 items.splice(items.indexOf(it), 1); saveItems(); renderList(); return;
             }
             if (panel.classList.contains('qp-editing')) {
-                if (e.target.closest('.qp-up'))  { moveItem(it, -1); return; }
-                if (e.target.closest('.qp-dn'))  { moveItem(it, 1);  return; }
                 if (e.target.closest('.qp-inv')) { it.inv = !it.inv; saveItems(); syncStates(); toast(it.inv ? 'Индикатор перевёрнут' : 'Индикатор как есть'); return; }
-                if (e.target.closest('.qp-info')) { const t = resolveItem(it); toast(t ? describe(t) : 'Элемент не найден'); return; }
-                if (e.target.closest('.qp-chip-folder-sel')) return;
+                if (e.target.closest('.qp-info')) {
+                    if (it.ad) { toast(it.ad + ' | ' + it.key + ' | ' + adState(it)); return; }
+                    const t = resolveItem(it); toast(t ? describe(t) : 'Элемент не найден'); return;
+                }
+                if (e.target.closest('.qp-fold-pick')) return;
                 if (chip.classList.contains('qp-has-sel')) return;
                 startRename(chip, label, it);
                 return;
             }
             if (chip.classList.contains('qp-has-sel')) return;
+            if (it.ad) {
+                chip.classList.remove('qp-flash'); void chip.offsetWidth; chip.classList.add('qp-flash');
+                adFire(it); syncStates();
+                return;
+            }
             const t = resolveItem(it);
             if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
             const before = sigOf(t);
@@ -677,16 +1052,20 @@
 
     function fingerprint(el) {
         const p = el.parentElement;
+        // list: элемент кастомного списка — ищем его по тексту, а не по позиции,
+        // потому что такие списки пересортировываются и перерисовываются целиком
+        const list = !el.id && !el.matches(NATIVE_CLICKABLE) && !isToggleLike(el) && isListItem(el) && !!txtOf(el);
         return {
             tag: el.tagName,
             eid: el.id || '',
             aid: el.getAttribute('data-qp-id') || '',
             cls: stableCls(el),
             title: el.getAttribute('title') || '',
-            txt: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40),
-            row: rowOf(el),
+            txt: txtOf(el),
+            row: list ? '' : rowOf(el),
             pos: p ? Array.from(p.children).indexOf(el) : -1,
-            host: hostOf(el)
+            host: hostOf(el),
+            list
         };
     }
 
@@ -697,6 +1076,8 @@
         if (el.id) return -1;
 
         if (fp.cls && stableCls(el) !== fp.cls) return -1;
+        const txt = txtOf(el);
+        if (fp.list && fp.txt && txtKey(txt) !== txtKey(fp.txt)) return -1;
         if (fp.row && rowOf(el) !== fp.row) return -1;
         if (fp.host && hostOf(el) !== fp.host) return -1;
 
@@ -708,7 +1089,6 @@
         const p = el.parentElement;
         if (fp.pos >= 0 && p && Array.from(p.children).indexOf(el) === fp.pos) s += 10;
         if (fp.title && el.getAttribute('title') === fp.title) s += 5;
-        const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
         if (fp.txt && txt === fp.txt) s += 5;
         return s;
     }
@@ -722,6 +1102,7 @@
     }
 
     function resolveItem(it) {
+        if (it.ad) return null;
         if (!it.fp) {
             const g = safeQuery(it.sel);
             if (!g) return null;
@@ -752,18 +1133,26 @@
                 it._el = el;
                 return el;
             }
-            // Отпечаток не совпал, но селектор нашёл элемент — переснимаем отпечаток
-            it.fp = fingerprint(el);
-            if (!it.fp.aid) it.fp.aid = it.id;
-            el.setAttribute('data-qp-id', it.fp.aid);
-            it._el = el;
-            saveItems();
-            return el;
+            // Отпечаток не совпал, но селектор нашёл элемент — переснимаем отпечаток.
+            // Для элементов списка так делать нельзя: по позиции там уже лежит
+            // ДРУГАЯ карточка (список пересортировался), ищем дальше по тексту.
+            if (!it.fp.list) {
+                it.fp = fingerprint(el);
+                if (!it.fp.aid) it.fp.aid = it.id;
+                el.setAttribute('data-qp-id', it.fp.aid);
+                it._el = el;
+                saveItems();
+                return el;
+            }
         }
 
-
+        const cands = [];
+        if (it.fp.cls) {
+            try { cands.push(...document.querySelectorAll(it.fp.tag.toLowerCase() + '.' + it.fp.cls.split(' ').map(esc).join('.'))); } catch (e) {}
+        }
+        cands.push(...document.querySelectorAll(INTERACTIVE));
         let best = null, bestScore = -1;
-        for (const c of document.querySelectorAll(INTERACTIVE)) {
+        for (const c of cands) {
             const s = fpScore(c, it.fp);
             if (s > bestScore) { bestScore = s; best = c; if (s >= 90) break; }
         }
@@ -858,6 +1247,7 @@
         let on = guessOn(sig);
         if (on === null && it.sigOn) on = (sig === it.sigOn);
         else if (on === null && it.sigOff) on = (sig !== it.sigOff);
+        if (on === null && it.fp && it.fp.list) on = false; // карточка без active-класса = не выбрана
         if (on === null) return 'unknown';
         return (it.inv ? !on : on) ? 'on' : 'off';
     }
@@ -873,6 +1263,14 @@
         listEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach((chip) => {
             const it = items.find(x => x.id === chip.dataset.qpItemId);
             if (!it) return;
+            if (it.ad) {
+                const st = adState(it);
+                chip.classList.toggle('qp-missing', st === 'missing');
+                chip.classList.add('qp-tgl');
+                chip.classList.toggle('qp-on', st === 'on');
+                chip.classList.remove('qp-unknown');
+                return;
+            }
             const t = resolveItem(it);
             chip.classList.toggle('qp-missing', !t);
 
@@ -1027,7 +1425,7 @@ function openPanel() {
 
     (function restoreBtn() {
         const saved = lsGet(LS_BTNPOS, null);
-        const w = btn.offsetWidth || 42, h = btn.offsetHeight || 42;
+        const w = btn.offsetWidth || 34, h = btn.offsetHeight || 34;
         let left = saved && typeof saved.left === 'number' ? saved.left : window.innerWidth - w - 14;
         let top  = saved && typeof saved.top  === 'number' ? saved.top  : Math.round(window.innerHeight * 0.5);
         btn.style.left = clamp(left, 4, window.innerWidth - w - 4) + 'px';
@@ -1074,6 +1472,61 @@ function openPanel() {
         if (!cfg.float) closePanel();
     }
 
+    /* ---------------- ВНЕШНИЙ ВИД: иконка и акцентный цвет ---------------- */
+
+    // Только бесплатные solid-иконки Font Awesome 6
+    const ICONS = [
+        'fa-bolt', 'fa-bolt-lightning', 'fa-circle-check', 'fa-star', 'fa-heart', 'fa-fire',
+        'fa-fire-flame-curved', 'fa-wand-magic-sparkles', 'fa-wand-sparkles', 'fa-hat-wizard', 'fa-gem', 'fa-crown',
+        'fa-dragon', 'fa-ghost', 'fa-skull', 'fa-cat', 'fa-paw', 'fa-crow',
+        'fa-dove', 'fa-frog', 'fa-otter', 'fa-kiwi-bird', 'fa-spider', 'fa-fish',
+        'fa-feather', 'fa-leaf', 'fa-seedling', 'fa-moon', 'fa-sun', 'fa-snowflake',
+        'fa-meteor', 'fa-rocket', 'fa-user-astronaut', 'fa-robot', 'fa-atom', 'fa-brain',
+        'fa-eye', 'fa-yin-yang', 'fa-infinity', 'fa-dice-d20', 'fa-gamepad', 'fa-puzzle-piece',
+        'fa-music', 'fa-palette', 'fa-mug-hot', 'fa-compass', 'fa-sliders', 'fa-layer-group'
+    ];
+
+    // Цвета берутся из текущей темы таверны (User Settings → UI Theme)
+    const ACCENTS = {
+        quote:     { label: 'Цитаты',        v: '--SmartThemeQuoteColor' },
+        em:        { label: 'Курсив',        v: '--SmartThemeEmColor' },
+        underline: { label: 'Подчёркивание', v: '--SmartThemeUnderlineColor' },
+        body:      { label: 'Текст',         v: '--SmartThemeBodyColor' },
+        custom:    { label: 'Свой',          v: '' }
+    };
+
+    const cleanIcon = (v) => {
+        const m = String(v || '').match(/fa-(?!solid|regular|brands|fw|lg|xl|2x)[a-z0-9-]+/g);
+        return m ? m[m.length - 1] : '';
+    };
+
+    // Иконка реально есть в подключённом наборе? (у несуществующей нет ::before-контента)
+    function iconExists(name) {
+        const i = document.createElement('i');
+        i.className = 'fa-solid ' + name;
+        i.style.cssText = 'position:absolute;visibility:hidden;left:-9999px';
+        document.body.appendChild(i);
+        const c = getComputedStyle(i, '::before').content;
+        i.remove();
+        return !!c && c !== 'none' && c !== 'normal' && c !== '""';
+    }
+
+    function applyLook() {
+        const ic = cleanIcon(cfg.icon) || 'fa-bolt';
+        const bi = btn.querySelector('i');
+        if (bi) bi.className = 'fa-solid ' + ic;
+        const wd = document.querySelector('#qp-wand .extensionsMenuExtensionButton');
+        if (wd) wd.className = 'fa-solid ' + ic + ' extensionsMenuExtensionButton';
+        const ti = panel && panel.querySelector('.qp-title i');
+        if (ti) ti.className = 'fa-solid ' + ic;
+
+        const a = ACCENTS[cfg.accent] || ACCENTS.quote;
+        const val = cfg.accent === 'custom'
+            ? (/^#[0-9a-f]{6}$/i.test(cfg.accentColor) ? cfg.accentColor : '#6aa9ff')
+            : 'var(' + a.v + ', #6aa9ff)';
+        document.documentElement.style.setProperty('--qp-accent', val);
+    }
+
     /* ---------------- ПУНКТ В МЕНЮ ПАЛОЧКИ ---------------- */
 
     function mountWand() {
@@ -1090,6 +1543,7 @@ function openPanel() {
             menu.appendChild(item);
         }
         item.classList.toggle('qp-hidden', !cfg.wand);
+        applyLook();
         return true;
     }
 
@@ -1181,9 +1635,94 @@ function buildSettings() {
 
         const hint = document.createElement('small');
         hint.className = 'qp-set-hint';
-        hint.textContent = 'Включи прицел и кликни по кнопке или тоглу. Корзинка — удалить. Карандаш — переименование и порядок. Двойной клик по шапке — сброс размера.';
+        hint.textContent = 'Включи прицел и кликни по кнопке или тоглу. Корзинка — удалить. Карандаш — переименование; в этом режиме зажми чип или папку и перетащи (мышью — просто тяни). Двойной клик по шапке — сброс размера.';
 
-        inner.append(cFloat.label, cWand.label, row, hint);
+        // --- Иконка кнопки ---
+        const icoBlock = document.createElement('div');
+        icoBlock.className = 'qp-set-block';
+        icoBlock.innerHTML = '<div class="qp-set-cap">Иконка кнопки</div>';
+        const grid = document.createElement('div');
+        grid.className = 'qp-ico-grid';
+        const markIcon = () => {
+            const cur = cleanIcon(cfg.icon) || 'fa-bolt';
+            grid.querySelectorAll('.qp-ico-opt').forEach(o => o.classList.toggle('qp-sel', o.dataset.ico === cur));
+        };
+        ICONS.forEach(name => {
+            const o = document.createElement('div');
+            o.className = 'qp-ico-opt';
+            o.dataset.ico = name;
+            o.title = name.replace(/^fa-/, '');
+            o.innerHTML = '<i class="fa-solid ' + name + '"></i>';
+            grid.appendChild(o);
+        });
+        grid.addEventListener('click', (e) => {
+            const o = e.target.closest('.qp-ico-opt');
+            if (!o) return;
+            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+            cfg.icon = o.dataset.ico; saveCfg(); applyLook(); markIcon();
+            customIco.value = '';
+        });
+        const customRow = document.createElement('div');
+        customRow.className = 'qp-ico-custom-row';
+        const customIco = document.createElement('input');
+        customIco.className = 'text_pole qp-ico-custom';
+        customIco.placeholder = 'своя: например fa-otter';
+        const customOk = document.createElement('div');
+        customOk.className = 'menu_button menu_button_icon';
+        customOk.innerHTML = '<i class="fa-solid fa-check"></i>';
+        customOk.title = 'Применить';
+        customRow.append(customIco, customOk);
+        const applyCustom = () => {
+            const name = cleanIcon(customIco.value);
+            if (!name) { toast('Впиши название вида fa-что-то'); return; }
+            if (!iconExists(name)) { toast('Такой иконки нет в бесплатном наборе'); return; }
+            cfg.icon = name; saveCfg(); applyLook(); markIcon();
+            toast('Иконка: ' + name);
+        };
+        customOk.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); applyCustom(); });
+        customIco.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') applyCustom(); });
+        icoBlock.append(grid, customRow);
+        markIcon();
+
+        // --- Цвет иконки и контура ---
+        const accBlock = document.createElement('div');
+        accBlock.className = 'qp-set-block';
+        accBlock.innerHTML = '<div class="qp-set-cap">Цвет иконки и контура (из темы таверны)</div>';
+        const accRow = document.createElement('div');
+        accRow.className = 'qp-acc-row';
+        const picker = document.createElement('input');
+        picker.type = 'color';
+        picker.className = 'qp-acc-picker';
+        picker.value = /^#[0-9a-f]{6}$/i.test(cfg.accentColor) ? cfg.accentColor : '#6aa9ff';
+        const markAcc = () => {
+            accRow.querySelectorAll('.qp-acc-opt').forEach(o => o.classList.toggle('qp-sel', o.dataset.acc === cfg.accent));
+            picker.classList.toggle('qp-hidden', cfg.accent !== 'custom');
+        };
+        Object.entries(ACCENTS).forEach(([key, a]) => {
+            const o = document.createElement('div');
+            o.className = 'qp-acc-opt';
+            o.dataset.acc = key;
+            const sw = document.createElement('span');
+            sw.className = 'qp-acc-sw';
+            sw.style.background = key === 'custom'
+                ? 'conic-gradient(#ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c77dff, #ff6b6b)'
+                : 'var(' + a.v + ')';
+            const lb = document.createElement('span');
+            lb.textContent = a.label;
+            o.append(sw, lb);
+            o.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                cfg.accent = key; saveCfg(); applyLook(); markAcc();
+            });
+            accRow.appendChild(o);
+        });
+        ['pointerdown', 'click'].forEach(ev => picker.addEventListener(ev, e => e.stopPropagation()));
+        picker.addEventListener('input', () => { cfg.accentColor = picker.value; saveCfg(); applyLook(); });
+        accRow.appendChild(picker);
+        accBlock.append(accRow);
+        markAcc();
+
+        inner.append(cFloat.label, cWand.label, icoBlock, accBlock, row, hint);
         body.appendChild(inner);
         block.append(head, body);
         host.appendChild(block);
@@ -1206,7 +1745,7 @@ function buildSettings() {
         bPick.addEventListener('click', guard(() => startPick()));
         bReset.addEventListener('click', guard(() => {
             try { localStorage.removeItem(LS_BTNPOS); localStorage.removeItem(LS_BOX_D); localStorage.removeItem(LS_BOX_M); } catch (e) {}
-            const w = btn.offsetWidth || 42;
+            const w = btn.offsetWidth || 34;
             btn.style.left = (window.innerWidth - w - 14) + 'px';
             btn.style.top  = Math.round(window.innerHeight * 0.5) + 'px';
             if (panel) { panel.style.width = '190px'; panel.style.height = '230px'; requestAnimationFrame(() => placePanel(true)); }
@@ -1222,6 +1761,7 @@ function buildSettings() {
     /* ---------------- СТАРТ ---------------- */
 
     applyFloat();
+    applyLook();
 
     window.addEventListener('resize', () => {
         const w = btn.offsetWidth, h = btn.offsetHeight;
