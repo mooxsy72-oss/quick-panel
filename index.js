@@ -30,7 +30,7 @@
    
     let cfg   = Object.assign({ float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff' }, lsGet(LS_CFG, {}));
 
-    const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, ...rest }) => rest));
+    const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, _missAt, ...rest }) => rest));
     const saveCfg     = () => lsSet(LS_CFG, cfg);
     const saveFolders = () => lsSet(LS_FOLDERS, folders);
 
@@ -534,7 +534,7 @@
         panel.id = PANEL_ID;
         panel.innerHTML = `
             <div class="qp-head">
-                <span class="qp-title"><i class="fa-solid fa-bolt"></i> Панель</span>
+                <span class="qp-title"><i class="fa-solid fa-heart"></i> Твои кнопочки</span>
                 <div class="qp-acts">
                     <div class="qp-ico qp-pin" title="Закрепить"><i class="fa-solid fa-thumbtack"></i></div>
                     <div class="qp-ico qp-pick" title="Добавить (зажми элемент)"><i class="fa-solid fa-crosshairs"></i></div>
@@ -584,7 +584,7 @@
             if (e.target.closest('.qp-ico')) return;
             if (panel.classList.contains('qp-pinned')) return;
             try { localStorage.removeItem(boxKey()); } catch (err) {}
-            panel.style.width = '190px';
+            panel.style.width = '200px';
             panel.style.height = '230px';
             requestAnimationFrame(() => placePanel(true));
         });
@@ -965,6 +965,7 @@
                 adFire(it); syncStates();
                 return;
             }
+            it._missAt = 0;
             const t = resolveItem(it);
             if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
             const before = sigOf(t);
@@ -984,6 +985,7 @@
 
     function renderList() {
         if (!listEl) return;
+        items.forEach(it => { it._missAt = 0; });
         listEl.innerHTML = '';
 
         if (panel.classList.contains('qp-editing')) {
@@ -1113,8 +1115,17 @@
         }
         if (it._el && it._el.isConnected && fpScore(it._el, it.fp) >= 0) return it._el;
         it._el = null;
+        // Недавно уже искали и не нашли — не перебираем DOM на каждом тике
+        if (it._missAt && Date.now() - it._missAt < 2000) return null;
+        const found = resolveSlow(it);
+        it._missAt = found ? 0 : Date.now();
+        return found;
+    }
 
-        let el = it.fp.aid ? document.querySelector('[data-qp-id="' + it.fp.aid + '"]') : null;
+    function resolveSlow(it) {
+        let el;
+
+        el = it.fp.aid ? document.querySelector('[data-qp-id="' + it.fp.aid + '"]') : null;
         if (el && el.isConnected && fpScore(el, it.fp) >= 0) { it._el = el; return el; }
 
         if (it.fp.eid) {
@@ -1150,7 +1161,8 @@
         if (it.fp.cls) {
             try { cands.push(...document.querySelectorAll(it.fp.tag.toLowerCase() + '.' + it.fp.cls.split(' ').map(esc).join('.'))); } catch (e) {}
         }
-        cands.push(...document.querySelectorAll(INTERACTIVE));
+        // Полный перебор всех кликабельных элементов страницы — дорого, только если класса нет
+        if (!it.fp.cls) cands.push(...document.querySelectorAll(INTERACTIVE));
         let best = null, bestScore = -1;
         for (const c of cands) {
             const s = fpScore(c, it.fp);
@@ -1259,7 +1271,7 @@
     }
 
     function syncStates() {
-        if (!listEl) return;
+        if (!listEl || !panel.classList.contains('qp-open') || document.hidden) return;
         listEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach((chip) => {
             const it = items.find(x => x.id === chip.dataset.qpItemId);
             if (!it) return;
@@ -1284,9 +1296,9 @@
     let mo = null, lastSync = 0, syncPend = null;
     function requestSync() {
         const now = Date.now();
-        if (now - lastSync > 220) { lastSync = now; syncStates(); return; }
+        if (now - lastSync > 350) { lastSync = now; syncStates(); return; }
         if (syncPend) return;
-        syncPend = setTimeout(() => { syncPend = null; lastSync = Date.now(); syncStates(); }, 220);
+        syncPend = setTimeout(() => { syncPend = null; lastSync = Date.now(); syncStates(); }, 350);
     }
     function startWatch() {
         if (mo) return;
@@ -1322,7 +1334,7 @@
             }
             return;
         }
-        const w = panel.offsetWidth || 190;
+        const w = panel.offsetWidth || 200;
         const h = panel.offsetHeight || 230;
         if (box && typeof box.left === 'number') {
             panel.style.left = clamp(box.left, 8, Math.max(8, window.innerWidth - w - 8)) + 'px';
@@ -1345,7 +1357,7 @@ function openPanel() {
         renderList();
         startWatch();
         clearInterval(tickTimer);
-        tickTimer = setInterval(syncStates, 1200);
+        tickTimer = setInterval(syncStates, 2000);
     }
     function closePanel() {
         if (panel && panel.classList.contains('qp-open')) saveBox();
@@ -1500,25 +1512,12 @@ function openPanel() {
         return m ? m[m.length - 1] : '';
     };
 
-    // Иконка реально есть в подключённом наборе? (у несуществующей нет ::before-контента)
-    function iconExists(name) {
-        const i = document.createElement('i');
-        i.className = 'fa-solid ' + name;
-        i.style.cssText = 'position:absolute;visibility:hidden;left:-9999px';
-        document.body.appendChild(i);
-        const c = getComputedStyle(i, '::before').content;
-        i.remove();
-        return !!c && c !== 'none' && c !== 'normal' && c !== '""';
-    }
-
     function applyLook() {
         const ic = cleanIcon(cfg.icon) || 'fa-bolt';
         const bi = btn.querySelector('i');
         if (bi) bi.className = 'fa-solid ' + ic;
         const wd = document.querySelector('#qp-wand .extensionsMenuExtensionButton');
         if (wd) wd.className = 'fa-solid ' + ic + ' extensionsMenuExtensionButton';
-        const ti = panel && panel.querySelector('.qp-title i');
-        if (ti) ti.className = 'fa-solid ' + ic;
 
         const a = ACCENTS[cfg.accent] || ACCENTS.quote;
         const val = cfg.accent === 'custom'
@@ -1637,90 +1636,96 @@ function buildSettings() {
         hint.className = 'qp-set-hint';
         hint.textContent = 'Включи прицел и кликни по кнопке или тоглу. Корзинка — удалить. Карандаш — переименование; в этом режиме зажми чип или папку и перетащи (мышью — просто тяни). Двойной клик по шапке — сброс размера.';
 
-        // --- Иконка кнопки ---
-        const icoBlock = document.createElement('div');
-        icoBlock.className = 'qp-set-block';
-        icoBlock.innerHTML = '<div class="qp-set-cap">Иконка кнопки</div>';
-        const grid = document.createElement('div');
-        grid.className = 'qp-ico-grid';
-        const markIcon = () => {
-            const cur = cleanIcon(cfg.icon) || 'fa-bolt';
-            grid.querySelectorAll('.qp-ico-opt').forEach(o => o.classList.toggle('qp-sel', o.dataset.ico === cur));
-        };
-        ICONS.forEach(name => {
-            const o = document.createElement('div');
-            o.className = 'qp-ico-opt';
-            o.dataset.ico = name;
-            o.title = name.replace(/^fa-/, '');
-            o.innerHTML = '<i class="fa-solid ' + name + '"></i>';
-            grid.appendChild(o);
-        });
-        grid.addEventListener('click', (e) => {
-            const o = e.target.closest('.qp-ico-opt');
-            if (!o) return;
-            e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-            cfg.icon = o.dataset.ico; saveCfg(); applyLook(); markIcon();
-            customIco.value = '';
-        });
-        const customRow = document.createElement('div');
-        customRow.className = 'qp-ico-custom-row';
-        const customIco = document.createElement('input');
-        customIco.className = 'text_pole qp-ico-custom';
-        customIco.placeholder = 'своя: например fa-otter';
-        const customOk = document.createElement('div');
-        customOk.className = 'menu_button menu_button_icon';
-        customOk.innerHTML = '<i class="fa-solid fa-check"></i>';
-        customOk.title = 'Применить';
-        customRow.append(customIco, customOk);
-        const applyCustom = () => {
-            const name = cleanIcon(customIco.value);
-            if (!name) { toast('Впиши название вида fa-что-то'); return; }
-            if (!iconExists(name)) { toast('Такой иконки нет в бесплатном наборе'); return; }
-            cfg.icon = name; saveCfg(); applyLook(); markIcon();
-            toast('Иконка: ' + name);
-        };
-        customOk.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); applyCustom(); });
-        customIco.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') applyCustom(); });
-        icoBlock.append(grid, customRow);
-        markIcon();
-
-        // --- Цвет иконки и контура ---
-        const accBlock = document.createElement('div');
-        accBlock.className = 'qp-set-block';
-        accBlock.innerHTML = '<div class="qp-set-cap">Цвет иконки и контура (из темы таверны)</div>';
-        const accRow = document.createElement('div');
-        accRow.className = 'qp-acc-row';
-        const picker = document.createElement('input');
-        picker.type = 'color';
-        picker.className = 'qp-acc-picker';
-        picker.value = /^#[0-9a-f]{6}$/i.test(cfg.accentColor) ? cfg.accentColor : '#6aa9ff';
-        const markAcc = () => {
-            accRow.querySelectorAll('.qp-acc-opt').forEach(o => o.classList.toggle('qp-sel', o.dataset.acc === cfg.accent));
-            picker.classList.toggle('qp-hidden', cfg.accent !== 'custom');
-        };
-        Object.entries(ACCENTS).forEach(([key, a]) => {
-            const o = document.createElement('div');
-            o.className = 'qp-acc-opt';
-            o.dataset.acc = key;
-            const sw = document.createElement('span');
-            sw.className = 'qp-acc-sw';
-            sw.style.background = key === 'custom'
-                ? 'conic-gradient(#ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c77dff, #ff6b6b)'
-                : 'var(' + a.v + ')';
-            const lb = document.createElement('span');
-            lb.textContent = a.label;
-            o.append(sw, lb);
-            o.addEventListener('click', (e) => {
+        // Свёрнутый подраздел: содержимое строится при первом открытии
+        const mkSection = (title, previewFn, build) => {
+            const sec = document.createElement('div');
+            sec.className = 'qp-sub';
+            const head = document.createElement('div');
+            head.className = 'qp-sub-head';
+            head.innerHTML = '<i class="fa-solid fa-chevron-right qp-sub-arrow"></i><span class="qp-sub-title"></span><span class="qp-sub-prev"></span>';
+            head.querySelector('.qp-sub-title').textContent = title;
+            const prev = head.querySelector('.qp-sub-prev');
+            const body = document.createElement('div');
+            body.className = 'qp-sub-body';
+            let built = false;
+            const refreshPrev = () => previewFn(prev);
+            head.addEventListener('click', (e) => {
                 e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-                cfg.accent = key; saveCfg(); applyLook(); markAcc();
+                if (!built) { build(body, refreshPrev); built = true; }
+                sec.classList.toggle('qp-sub-open');
             });
-            accRow.appendChild(o);
-        });
-        ['pointerdown', 'click'].forEach(ev => picker.addEventListener(ev, e => e.stopPropagation()));
-        picker.addEventListener('input', () => { cfg.accentColor = picker.value; saveCfg(); applyLook(); });
-        accRow.appendChild(picker);
-        accBlock.append(accRow);
-        markAcc();
+            refreshPrev();
+            sec.append(head, body);
+            return sec;
+        };
+
+        const icoBlock = mkSection('Иконка кнопки',
+            (p) => { p.innerHTML = '<i class="fa-solid ' + (cleanIcon(cfg.icon) || 'fa-bolt') + '"></i>'; },
+            (body, refreshPrev) => {
+                const grid = document.createElement('div');
+                grid.className = 'qp-ico-grid';
+                grid.innerHTML = ICONS.map(n =>
+                    '<div class="qp-ico-opt" data-ico="' + n + '" title="' + n.slice(3) + '"><i class="fa-solid ' + n + '"></i></div>'
+                ).join('');
+                const mark = () => {
+                    const cur = cleanIcon(cfg.icon) || 'fa-bolt';
+                    const old = grid.querySelector('.qp-sel');
+                    if (old) old.classList.remove('qp-sel');
+                    const now = grid.querySelector('[data-ico="' + cur + '"]');
+                    if (now) now.classList.add('qp-sel');
+                };
+                grid.addEventListener('click', (e) => {
+                    const o = e.target.closest('.qp-ico-opt');
+                    if (!o) return;
+                    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                    cfg.icon = o.dataset.ico; saveCfg(); applyLook(); mark(); refreshPrev();
+                });
+                body.appendChild(grid);
+                mark();
+            });
+
+        const accBlock = mkSection('Цвет иконки и контура',
+            (p) => { p.innerHTML = '<span class="qp-acc-sw" style="background: var(--qp-accent)"></span>'; },
+            (body) => {
+                const accRow = document.createElement('div');
+                accRow.className = 'qp-acc-row';
+                const picker = document.createElement('input');
+                picker.type = 'color';
+                picker.className = 'qp-acc-picker';
+                picker.value = /^#[0-9a-f]{6}$/i.test(cfg.accentColor) ? cfg.accentColor : '#6aa9ff';
+                const mark = () => {
+                    accRow.querySelectorAll('.qp-acc-opt').forEach(o => o.classList.toggle('qp-sel', o.dataset.acc === cfg.accent));
+                    picker.classList.toggle('qp-hidden', cfg.accent !== 'custom');
+                };
+                Object.entries(ACCENTS).forEach(([key, a]) => {
+                    const o = document.createElement('div');
+                    o.className = 'qp-acc-opt';
+                    o.dataset.acc = key;
+                    const sw = document.createElement('span');
+                    sw.className = 'qp-acc-sw';
+                    sw.style.background = key === 'custom'
+                        ? 'conic-gradient(#ff6b6b, #ffd93d, #6bcb77, #4d96ff, #c77dff, #ff6b6b)'
+                        : 'var(' + a.v + ')';
+                    const lb = document.createElement('span');
+                    lb.textContent = a.label;
+                    o.append(sw, lb);
+                    o.addEventListener('click', (e) => {
+                        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                        cfg.accent = key; saveCfg(); applyLook(); mark();
+                    });
+                    accRow.appendChild(o);
+                });
+                ['pointerdown', 'click'].forEach(ev => picker.addEventListener(ev, e => e.stopPropagation()));
+                // пока тянешь по палитре — только перекрашиваем, сохраняем по отпусканию
+                picker.addEventListener('input', () => { cfg.accentColor = picker.value; applyLook(); });
+                picker.addEventListener('change', () => { cfg.accentColor = picker.value; saveCfg(); });
+                accRow.appendChild(picker);
+                const cap = document.createElement('small');
+                cap.className = 'qp-set-hint';
+                cap.textContent = 'Цвет берётся из темы таверны и меняется вместе с ней.';
+                body.append(accRow, cap);
+                mark();
+            });
 
         inner.append(cFloat.label, cWand.label, icoBlock, accBlock, row, hint);
         body.appendChild(inner);
@@ -1748,7 +1753,7 @@ function buildSettings() {
             const w = btn.offsetWidth || 34;
             btn.style.left = (window.innerWidth - w - 14) + 'px';
             btn.style.top  = Math.round(window.innerHeight * 0.5) + 'px';
-            if (panel) { panel.style.width = '190px'; panel.style.height = '230px'; requestAnimationFrame(() => placePanel(true)); }
+            if (panel) { panel.style.width = '200px'; panel.style.height = '230px'; requestAnimationFrame(() => placePanel(true)); }
         }));
         bClear.addEventListener('click', guard(() => {
             items = []; saveItems(); renderList(); toast('Список очищен');
