@@ -534,7 +534,7 @@
         panel.id = PANEL_ID;
         panel.innerHTML = `
             <div class="qp-head">
-                <span class="qp-title"><i class="fa-solid fa-heart"></i> Твои кнопочки</span>
+                <span class="qp-title"><i class="fa-solid fa-bolt"></i> Твои кнопочки</span>
                 <div class="qp-acts">
                     <div class="qp-ico qp-pin" title="Закрепить"><i class="fa-solid fa-thumbtack"></i></div>
                     <div class="qp-ico qp-pick" title="Добавить (зажми элемент)"><i class="fa-solid fa-crosshairs"></i></div>
@@ -1518,6 +1518,8 @@ function openPanel() {
         if (bi) bi.className = 'fa-solid ' + ic;
         const wd = document.querySelector('#qp-wand .extensionsMenuExtensionButton');
         if (wd) wd.className = 'fa-solid ' + ic + ' extensionsMenuExtensionButton';
+        const ti = panel && panel.querySelector('.qp-title i');
+        if (ti) ti.className = 'fa-solid ' + ic;
 
         const a = ACCENTS[cfg.accent] || ACCENTS.quote;
         const val = cfg.accent === 'custom'
