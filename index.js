@@ -28,7 +28,7 @@
     let folders = lsGet(LS_FOLDERS, []); // [{id, name, collapsed}]
     window.qpDebug = { get items() { return items; }, get folders() { return folders; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
    
-    let cfg   = Object.assign({ float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff' }, lsGet(LS_CFG, {}));
+    let cfg   = Object.assign({ float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff', title: 'Твои кнопочки' }, lsGet(LS_CFG, {}));
 
     const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, _missAt, ...rest }) => rest));
     const saveCfg     = () => lsSet(LS_CFG, cfg);
@@ -529,6 +529,59 @@
 
     let panel = null, listEl = null, tickTimer = null;
 
+    const isLocked = () => !!panel && panel.classList.contains('qp-locked');
+
+    function paintLock() {
+        const b = panel && panel.querySelector('.qp-pin');
+        if (!b) return;
+        const on = isLocked();
+        b.innerHTML = '<i class="fa-solid ' + (on ? 'fa-lock' : 'fa-lock-open') + '"></i>';
+        b.title = on ? 'Удаление запрещено' : 'Запретить удаление';
+    }
+
+    const titleText = () => cfg.title || 'Твои кнопочки';
+
+    function paintTitle() {
+        const t = panel && panel.querySelector('.qp-title');
+        if (!t) return;
+        const ic = t.querySelector('i') || document.createElement('i');
+        t.innerHTML = '';
+        t.append(ic, document.createTextNode(' ' + titleText()));
+        applyLook();
+    }
+
+    function startTitleRename() {
+        const t = panel.querySelector('.qp-title');
+        if (!t || t.querySelector('input')) return;
+        const inp = document.createElement('input');
+        inp.className = 'qp-rename qp-title-inp';
+        inp.value = titleText();
+        inp.maxLength = 40;
+        t.innerHTML = '';
+        t.appendChild(inp);
+        inp.focus();
+        inp.select();
+        ['pointerdown', 'mousedown', 'click', 'touchstart', 'dblclick'].forEach(ev =>
+            inp.addEventListener(ev, (e) => e.stopPropagation()));
+        let done = false;
+        const finish = (save) => {
+            if (done) return;
+            done = true;
+            if (save) { cfg.title = inp.value.trim() || 'Твои кнопочки'; saveCfg(); }
+            paintTitle();
+        };
+        inp.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') finish(true);
+            if (e.key === 'Escape') finish(false);
+        });
+        inp.addEventListener('blur', () => finish(true));
+    }
+
+    // После открытия панели чипы недолго не реагируют — чтобы не промахнуться пальцем
+    const OPEN_GRACE_MS = 900;
+    let openedAt = 0;
+
     function buildPanel() {
         panel = document.createElement('div');
         panel.id = PANEL_ID;
@@ -536,7 +589,7 @@
             <div class="qp-head">
                 <span class="qp-title"><i class="fa-solid fa-bolt"></i> Твои кнопочки</span>
                 <div class="qp-acts">
-                    <div class="qp-ico qp-pin" title="Закрепить"><i class="fa-solid fa-thumbtack"></i></div>
+                    <div class="qp-ico qp-pin" title="Запретить удаление"><i class="fa-solid fa-lock-open"></i></div>
                     <div class="qp-ico qp-pick" title="Добавить (зажми элемент)"><i class="fa-solid fa-crosshairs"></i></div>
                     <div class="qp-ico qp-edit" title="Переименовать"><i class="fa-solid fa-pen"></i></div>
                     <div class="qp-ico qp-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div>
@@ -552,14 +605,22 @@
         listEl.addEventListener('contextmenu', (e) => {
             if (panel.classList.contains('qp-editing')) e.preventDefault();
         });
-        const pinned = lsGet('qpPinned', false);
-        if (pinned) panel.classList.add('qp-pinned');
+        if (lsGet('qpPinned', false)) panel.classList.add('qp-locked');
+        paintLock();
 
         panel.querySelector('.qp-pin').addEventListener('click', () => {
-            panel.classList.toggle('qp-pinned');
-            const p = panel.classList.contains('qp-pinned');
+            panel.classList.toggle('qp-locked');
+            const p = isLocked();
             lsSet('qpPinned', p);
-            toast(p ? 'Панель закреплена' : 'Панель откреплена');
+            paintLock();
+            toast(p ? 'Удаление заблокировано' : 'Удаление разрешено');
+        });
+
+        paintTitle();
+        panel.querySelector('.qp-title').addEventListener('click', (e) => {
+            if (!panel.classList.contains('qp-editing')) return;
+            e.stopPropagation();
+            startTitleRename();
         });
 
         const box = lsGet(boxKey(), null);
@@ -582,7 +643,6 @@
 
         panel.querySelector('.qp-head').addEventListener('dblclick', (e) => {
             if (e.target.closest('.qp-ico')) return;
-            if (panel.classList.contains('qp-pinned')) return;
             try { localStorage.removeItem(boxKey()); } catch (err) {}
             panel.style.width = '200px';
             panel.style.height = '230px';
@@ -845,6 +905,7 @@
                 return;
             }
             if (e.target.closest('.qp-folder-del')) {
+                if (isLocked()) { toast('Удаление заблокировано'); return; }
                 if (confirm('Удалить папку «' + f.name + '»? Элементы останутся в списке, просто без папки.')) deleteFolder(f.id);
                 return;
             }
@@ -945,7 +1006,9 @@
 
         chip.addEventListener('click', (e) => {
             if (justDragged()) { e.preventDefault(); return; }
+            if (Date.now() - openedAt < OPEN_GRACE_MS) { e.preventDefault(); return; }
             if (e.target.closest('.qp-chip-del')) {
+                if (isLocked()) { toast('Удаление заблокировано'); return; }
                 items.splice(items.indexOf(it), 1); saveItems(); renderList(); return;
             }
             if (panel.classList.contains('qp-editing')) {
@@ -1353,6 +1416,7 @@
 function openPanel() {
     if (!panel) buildPanel();
         panel.classList.add('qp-open');
+        openedAt = Date.now();
         requestAnimationFrame(() => placePanel(false));
         renderList();
         startWatch();
@@ -1403,7 +1467,6 @@ function openPanel() {
     function makeResizable(el, grip) {
         let sx = 0, sy = 0, sw = 0, sh = 0, act = false, id = null;
         grip.addEventListener('pointerdown', (e) => {
-            if (el.classList.contains('qp-pinned')) return;
             act = true; id = e.pointerId;
             sx = e.clientX; sy = e.clientY; sw = el.offsetWidth; sh = el.offsetHeight;
             grip.setPointerCapture(id);

@@ -225,9 +225,9 @@ body.qp-picking { cursor: crosshair !important; }
 }
 .qp-chip.qp-has-sel { cursor: default; }
 .qp-chip.qp-has-sel:hover { transform: none; }
-#qp-panel.qp-pinned .qp-head { cursor: default; }
-#qp-panel.qp-pinned .qp-grip { opacity: 0; pointer-events: none; }
-#qp-panel.qp-pinned .qp-pin { opacity: 1; background: var(--SmartThemeQuoteColor, #6aa9ff); color: #111; }
+#qp-panel.qp-locked .qp-pin { opacity: 1; background: var(--qp-accent); color: #111; }
+#qp-panel.qp-locked .qp-chip-del,
+#qp-panel.qp-locked .qp-folder-del { display: none !important; }
 
 .qp-extb-badge {
     display: inline-block;
@@ -534,3 +534,8 @@ body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-sel
     #qp-btn { backdrop-filter: none; background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1b1b1b) 94%, transparent); }
     #qp-panel { backdrop-filter: blur(8px); }
 }
+
+/* Заголовок панели переименовывается в режиме карандаша */
+#qp-panel.qp-editing .qp-title { cursor: text; }
+.qp-title-inp { width: 100%; min-width: 0; }
+.qp-title:has(.qp-title-inp) { flex: 1; min-width: 0; }
