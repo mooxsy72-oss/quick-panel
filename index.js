@@ -1405,6 +1405,7 @@
             }
             const t = resolveItem(it);
             chip.classList.toggle('qp-missing', !t);
+            if (chip.classList.contains('qp-strip-selchip')) stripSelLabel(chip, t);
 
             const st = stateOf(it, t);
             chip.classList.toggle('qp-tgl', st !== 'none');
@@ -1769,6 +1770,17 @@ function openPanel() {
         ensureTick();
     }
 
+    // Подпись чипа-списка в строке: текущий выбранный вариант оригинала
+    function stripSelLabel(chip, t) {
+        const lb = chip.querySelector('.qp-chip-lb');
+        if (!lb || !t || t.tagName !== 'SELECT') return;
+        const o = t.options[t.selectedIndex];
+        const txt = (o && o.textContent.trim()) || '';
+        lb.textContent = txt || chip.title;
+        const s = chip.querySelector('.qp-strip-sel');
+        if (s && s.value !== t.value && Array.from(s.options).some(x => x.value === t.value)) s.value = t.value;
+    }
+
     function renderStrip() {
         if (!stripEl) return;
         const box = stripEl.querySelector('.qp-strip-scroll');
@@ -1783,10 +1795,53 @@ function openPanel() {
             c.className = 'qp-chip qp-strip-chip';
             c.dataset.qpItemId = it.id;
             c.title = it.name;
-            c.innerHTML = '<span class="qp-chip-dot"></span><i class="' + (it.icon || 'fa-solid fa-circle-dot') + ' qp-chip-ic"></i>' +
-                '<span class="qp-chip-lb"></span>';
-            c.querySelector('.qp-chip-lb').textContent = it.name;
+            // В строке иконку чипа не рисуем — только индикатор и подпись
+            c.innerHTML = '<span class="qp-chip-dot"></span><span class="qp-chip-lb"></span>';
+            const lb = c.querySelector('.qp-chip-lb');
+            lb.textContent = it.name;
             if (f) paintFc(c, f);
+
+            // Выпадающий список: программно открыть оригинальный <select> браузер не даст,
+            // поэтому кладём поверх чипа свой прозрачный <select> — тап открывает его сразу,
+            // а выбранное значение переносим в оригинал (как в панели).
+            const target = it.ad ? null : resolveItem(it);
+            if (target && target.tagName === 'SELECT') {
+                c.classList.add('qp-has-sel', 'qp-strip-selchip');
+                const sel = document.createElement('select');
+                sel.className = 'qp-strip-sel';
+                sel.title = it.name;
+                const fill = () => {
+                    const t = resolveItem(it);
+                    if (!t || t.tagName !== 'SELECT') return null;
+                    sel.innerHTML = '';
+                    Array.from(t.options).forEach(o => {
+                        const op = document.createElement('option');
+                        op.value = o.value; op.textContent = o.textContent;
+                        op.disabled = o.disabled;
+                        sel.appendChild(op);
+                    });
+                    sel.value = t.value;
+                    return t;
+                };
+                fill();
+                stripSelLabel(c, target);
+                // перед открытием подтягиваем свежие варианты (профили могли добавиться)
+                sel.addEventListener('pointerdown', () => { if (!fill()) toast('Элемент не найден'); });
+                sel.addEventListener('focus', () => { fill(); });
+                sel.addEventListener('change', () => {
+                    const t = resolveItem(it);
+                    if (!t) { toast('Элемент не найден'); return; }
+                    t.value = sel.value;
+                    t.dispatchEvent(new Event('change', { bubbles: true }));
+                    t.dispatchEvent(new Event('input', { bubbles: true }));
+                    stripSelLabel(c, t);
+                    c.classList.remove('qp-flash'); void c.offsetWidth; c.classList.add('qp-flash');
+                    setTimeout(syncStates, 120);
+                });
+                c.appendChild(sel);
+                return c;
+            }
+
             c.addEventListener('click', () => activateItem(it, c));
             return c;
         };

@@ -621,6 +621,20 @@ body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-sel
 .qp-chip.qp-strip-chip .qp-chip-lb { flex: 0 1 auto; }
 .qp-chip.qp-strip-chip .qp-chip-ic { font-size: .9em; flex: 0 0 auto; }
 .qp-chip.qp-strip-chip .qp-chip-dot { width: 6px; height: 6px; flex: 0 0 6px; }
+.qp-chip.qp-strip-chip .qp-chip-ic { display: none; }
+/* чип-список в строке: прозрачный select поверх всего чипа */
+.qp-chip.qp-strip-chip.qp-strip-selchip { position: relative; cursor: pointer; }
+.qp-chip.qp-strip-chip.qp-strip-selchip::after {
+    content: ''; flex: 0 0 auto;
+    border-left: 3px solid transparent; border-right: 3px solid transparent;
+    border-top: 4px solid currentColor; opacity: .55;
+}
+.qp-strip-sel {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0; margin: 0; padding: 0; border: 0;
+    font-size: 16px; /* чтобы iOS не зумил страницу при открытии */
+    cursor: pointer; -webkit-appearance: none; appearance: none;
+}
 .qp-strip-empty { opacity: .5; white-space: nowrap; font-size: .9em; }
 .qp-strip-more {
     flex: 0 0 auto;
