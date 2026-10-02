@@ -621,18 +621,6 @@ body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-sel
 .qp-chip.qp-strip-chip .qp-chip-lb { flex: 0 1 auto; }
 .qp-chip.qp-strip-chip .qp-chip-ic { font-size: .9em; flex: 0 0 auto; }
 .qp-chip.qp-strip-chip .qp-chip-dot { width: 6px; height: 6px; flex: 0 0 6px; }
-.qp-strip-sep {
-    flex: 0 0 auto;
-    font-size: .78em;
-    text-transform: uppercase;
-    letter-spacing: .4px;
-    opacity: .45;
-    padding: 0 3px 0 6px;
-    white-space: nowrap;
-    border-left: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.2));
-}
-.qp-strip-sep:first-child { border-left: 0; padding-left: 0; }
-.qp-strip-sep.qp-strip-sep-line { padding: 0; height: 60%; }
 .qp-strip-empty { opacity: .5; white-space: nowrap; font-size: .9em; }
 .qp-strip-more {
     flex: 0 0 auto;
@@ -670,7 +658,6 @@ body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-sel
 #qp-panel.qp-docked.qp-dock-left.qp-open { animation-name: qp-slide-l; }
 @keyframes qp-slide-r { from { transform: translateX(100%); } to { transform: none; } }
 @keyframes qp-slide-l { from { transform: translateX(-100%); } to { transform: none; } }
-#qp-panel.qp-docked .qp-chip { padding-top: 8px; padding-bottom: 8px; }
 
 /* ---------- Настройки: карточки режимов ---------- */
 
@@ -735,3 +722,86 @@ body.qp-dnd-active, body.qp-dnd-active * { cursor: grabbing !important; user-sel
 .qp-seg-btn.qp-sel { opacity: 1; color: #111; background: var(--qp-accent); }
 .qp-set-cap { margin-top: 4px; font-weight: 600; opacity: .7; text-transform: uppercase; font-size: .78em; letter-spacing: .5px; }
 .qp-set-row .menu_button { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Цвета групп ---------- */
+
+.qp-folder.qp-has-fc { box-shadow: inset 3px 0 0 var(--qp-fc); padding-left: 7px; }
+.qp-folder.qp-has-fc .qp-folder-ic { color: var(--qp-fc); opacity: .95; }
+.qp-folder.qp-has-fc .qp-folder-count { background: color-mix(in srgb, var(--qp-fc) 22%, transparent); }
+.qp-chip.qp-has-fc::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 22%; bottom: 22%;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--qp-fc);
+    opacity: .85;
+}
+.qp-folder-tools .qp-folder-col:hover { color: var(--qp-fc, var(--qp-accent)); }
+
+/* ---------- Группы в строке ---------- */
+
+.qp-strip-grp {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: calc(var(--qp-strip-h) - 9px);
+    padding: 0 7px;
+    margin-left: 3px;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: .8em;
+    font-weight: 600;
+    letter-spacing: .2px;
+    opacity: .85;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,.2));
+    transition: opacity .15s ease, background .15s ease;
+}
+.qp-strip-grp:first-child { margin-left: 0; }
+.qp-strip-grp i { font-size: .75em; opacity: .7; }
+.qp-strip-grp b { font-weight: 600; opacity: .6; padding-left: 2px; }
+.qp-strip-grp:hover { opacity: 1; }
+.qp-strip-grp.qp-has-fc {
+    color: var(--qp-fc);
+    border-color: color-mix(in srgb, var(--qp-fc) 55%, transparent);
+    background: color-mix(in srgb, var(--qp-fc) 12%, transparent);
+}
+.qp-strip-grp.qp-strip-grp-off { opacity: .6; }
+.qp-chip.qp-strip-chip.qp-has-fc { background: color-mix(in srgb, var(--qp-fc) 10%, rgba(255,255,255,.04)); }
+.qp-chip.qp-strip-chip.qp-has-fc::before { top: 25%; bottom: 25%; width: 2px; }
+.qp-strip-sep-line {
+    flex: 0 0 1px;
+    align-self: center;
+    height: 55%;
+    margin: 0 3px;
+    background: var(--SmartThemeBorderColor, rgba(255,255,255,.25));
+}
+
+/* ---------- Закладка: компактная панель по центру у края ---------- */
+
+#qp-panel.qp-docked { border-radius: 14px 0 0 14px; }
+#qp-panel.qp-docked.qp-dock-left { border-radius: 0 14px 14px 0; }
+/* невидимая зона вокруг узкой закладки — легче попасть пальцем и свайпнуть */
+#qp-btn.qp-tab::after {
+    content: '';
+    position: absolute;
+    top: -12px; bottom: -12px;
+    left: -18px; right: 0;
+}
+#qp-btn.qp-tab.qp-tab-left::after { left: 0; right: -18px; }
+
+/* ---------- Тонкий скроллбар (на ПК стандартный слишком толстый) ---------- */
+
+.qp-body, .qp-ico-grid {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--SmartThemeBodyColor, #ddd) 22%, transparent) transparent;
+}
+.qp-body::-webkit-scrollbar, .qp-ico-grid::-webkit-scrollbar { width: 4px; height: 4px; }
+.qp-body::-webkit-scrollbar-track, .qp-ico-grid::-webkit-scrollbar-track { background: transparent; }
+.qp-body::-webkit-scrollbar-thumb, .qp-ico-grid::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #ddd) 22%, transparent);
+    border-radius: 4px;
+}
+.qp-body:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--SmartThemeBodyColor, #ddd) 38%, transparent); }

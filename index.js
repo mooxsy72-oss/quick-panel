@@ -31,7 +31,7 @@
     let cfg   = Object.assign({
         float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff',
         title: 'Твои кнопочки', mode: null, btnSize: 34, tabSide: 'right', tabTop: 50,
-        stripH: 26, dockW: 290
+        stripH: 26, dockW: 230
     }, lsGet(LS_CFG, {}));
     if (!cfg.mode) cfg.mode = cfg.float === false ? 'wand' : 'float';
     if (cfg.mode === 'bar') cfg.mode = 'float';   // старые режимы из прошлой версии
@@ -59,6 +59,26 @@
         folders = folders.filter(f => f.id !== id);
         saveItems(); saveFolders(); renderList();
     }
+    // Цвет группы: свой (номер в палитре), «без цвета» (-1) или автоматически по порядку
+    const FOLDER_COLORS = ['#e06c75', '#e5a54b', '#d7c35a', '#7fbf6a', '#56b6c2', '#61a6ef', '#b083e8', '#e07cb8'];
+    function folderColor(f) {
+        if (!f || f.color === -1) return '';
+        const i = typeof f.color === 'number' ? f.color : folders.indexOf(f);
+        return FOLDER_COLORS[((i % FOLDER_COLORS.length) + FOLDER_COLORS.length) % FOLDER_COLORS.length];
+    }
+    function paintFc(el, f) {
+        const c = folderColor(f);
+        el.classList.toggle('qp-has-fc', !!c);
+        if (c) el.style.setProperty('--qp-fc', c); else el.style.removeProperty('--qp-fc');
+    }
+    function cycleFolderColor(id) {
+        const f = folders.find(x => x.id === id);
+        if (!f) return;
+        const cur = typeof f.color === 'number' ? f.color : folders.indexOf(f) % FOLDER_COLORS.length;
+        f.color = cur === -1 ? 0 : (cur + 1 >= FOLDER_COLORS.length ? -1 : cur + 1);
+        saveFolders(); renderList();
+    }
+
     function toggleFolderOpen(id) {
         const f = folders.find(x => x.id === id);
         if (f) { f.collapsed = !f.collapsed; saveFolders(); renderList(); }
@@ -635,7 +655,7 @@
             sw = null;
             if ((dnd && dnd.active) || justDragged()) return;
             const out = cfg.tabSide === 'left' ? -dx : dx;
-            if (out > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) closePanel();
+            if (out > 35 && Math.abs(dx) > Math.abs(dy)) closePanel();
         }, { passive: true });
 
         paintTitle();
@@ -911,11 +931,13 @@
             '<div class="qp-folder-tools">' +
                 '<i class="fa-solid fa-toggle-on qp-t qp-folder-on" title="Включить все тоглы папки"></i>' +
                 '<i class="fa-solid fa-toggle-off qp-t qp-folder-off" title="Выключить все тоглы папки"></i>' +
+                '<i class="fa-solid fa-palette qp-t qp-folder-col" title="Сменить цвет группы"></i>' +
                 '<i class="fa-solid fa-pen qp-t qp-folder-ren" title="Переименовать папку"></i>' +
                 '<i class="fa-solid fa-trash qp-t qp-folder-del" title="Удалить папку"></i>' +
             '</div>';
         head.querySelector('.qp-folder-name').textContent = f.name;
         head.querySelector('.qp-folder-count').textContent = count;
+        paintFc(head, f);
 
         armDrag(head, 'folder', f.id);
         head.addEventListener('click', (e) => {
@@ -931,6 +953,7 @@
                 if (confirm('Удалить папку «' + f.name + '»? Элементы останутся в списке, просто без папки.')) deleteFolder(f.id);
                 return;
             }
+            if (e.target.closest('.qp-folder-col')) { cycleFolderColor(f.id); return; }
             if (e.target.closest('.qp-folder-on'))  { setGroupState(f.id, true);  return; }
             if (e.target.closest('.qp-folder-off')) { setGroupState(f.id, false); return; }
             toggleFolderOpen(f.id);
@@ -945,6 +968,7 @@
         chip.className = 'qp-chip' + (present ? '' : ' qp-missing') + (it.folder ? ' qp-chip-nested' : '');
         chip.dataset.qpItemId = it.id;
         chip.title = present ? it.name : 'Элемент не найден на странице';
+        if (it.folder) paintFc(chip, folders.find(f => f.id === it.folder));
         const dot = document.createElement('span');
         dot.className = 'qp-chip-dot';
         const ic = document.createElement('i');
@@ -1102,6 +1126,7 @@
         items.filter(it => !it.folder).forEach(it => listEl.appendChild(buildChip(it)));
 
         syncStates();
+        if (cfg.mode === 'tab' && panel.classList.contains('qp-open')) placeDocked();
     }
 
     function startRename(chip, label, it) {
@@ -1416,16 +1441,20 @@
     });
 
     // Режим «закладка»: панель выезжает сбоку и занимает высоту экрана
+    // Высота — по содержимому (но не больше 80% экрана), по вертикали — по центру у края
     function placeDocked() {
         const { w: vw, h: vh } = vp();
-        const w = Math.min(clamp(cfg.dockW || 290, 220, 440), Math.round(vw * 0.86));
+        const w = Math.min(clamp(cfg.dockW || 230, 180, 360), Math.round(vw * 0.8));
         const left = cfg.tabSide === 'left';
         panel.classList.add('qp-docked');
         panel.classList.toggle('qp-dock-left', left);
-        panel.style.width  = w + 'px';
-        panel.style.height = Math.max(200, vh - 16) + 'px';
-        panel.style.top    = '8px';
-        panel.style.left   = (left ? 0 : vw - w) + 'px';
+        panel.style.width = w + 'px';
+        panel.style.left  = (left ? 0 : vw - w) + 'px';
+        const head = panel.querySelector('.qp-head');
+        const need = (head ? head.offsetHeight : 38) + (listEl ? listEl.scrollHeight : 100) + 18;
+        const h = clamp(need, 120, Math.round(vh * 0.8));
+        panel.style.height = h + 'px';
+        panel.style.top = Math.max(6, Math.round((vh - h) / 2)) + 'px';
     }
 
     // Режим «строка»: панель открывается над строкой, по её правому краю
@@ -1633,7 +1662,7 @@ function openPanel() {
             if (cfg.mode === 'tab') {
                 btn.style.transform = '';
                 if (axis === 'x') {
-                    if (inward(e.clientX - sx) > 16) openPanel();
+                    if (inward(e.clientX - sx) > 6) openPanel();
                 } else {
                     cfg.tabTop = clamp(Math.round(((btn.offsetTop + btn.offsetHeight / 2) / window.innerHeight) * 100), 3, 97);
                     saveCfg(); placeTab();
@@ -1743,29 +1772,13 @@ function openPanel() {
     function renderStrip() {
         if (!stripEl) return;
         const box = stripEl.querySelector('.qp-strip-scroll');
+        const keepScroll = box.scrollLeft;
         box.innerHTML = '';
         if (!items.length) {
             box.innerHTML = '<span class="qp-strip-empty">Пусто — зажми кнопку справа, чтобы добавить</span>';
             return;
         }
-        const order = [];
-        folders.forEach(f => {
-            const g = items.filter(it => it.folder === f.id);
-            if (g.length) order.push({ sep: f.name }, ...g);
-        });
-        const root = items.filter(it => !it.folder || !folders.some(f => f.id === it.folder));
-        if (root.length && order.length) order.push({ sep: '' });
-        order.push(...root);
-
-        order.forEach(entry => {
-            if (entry.sep !== undefined) {
-                const s = document.createElement('span');
-                s.className = 'qp-strip-sep' + (entry.sep ? '' : ' qp-strip-sep-line');
-                s.textContent = entry.sep;
-                box.appendChild(s);
-                return;
-            }
-            const it = entry;
+        const mkChip = (it, f) => {
             const c = document.createElement('div');
             c.className = 'qp-chip qp-strip-chip';
             c.dataset.qpItemId = it.id;
@@ -1773,9 +1786,35 @@ function openPanel() {
             c.innerHTML = '<span class="qp-chip-dot"></span><i class="' + (it.icon || 'fa-solid fa-circle-dot') + ' qp-chip-ic"></i>' +
                 '<span class="qp-chip-lb"></span>';
             c.querySelector('.qp-chip-lb').textContent = it.name;
+            if (f) paintFc(c, f);
             c.addEventListener('click', () => activateItem(it, c));
-            box.appendChild(c);
+            return c;
+        };
+
+        folders.forEach(f => {
+            const g = items.filter(it => it.folder === f.id);
+            if (!g.length) return;
+            // ярлык группы: тап — свернуть/развернуть
+            const lab = document.createElement('div');
+            lab.className = 'qp-strip-grp' + (f.collapsed ? ' qp-strip-grp-off' : '');
+            lab.title = f.collapsed ? 'Показать группу' : 'Скрыть группу';
+            lab.innerHTML = '<i class="fa-solid fa-chevron-' + (f.collapsed ? 'right' : 'down') + '"></i><span></span>' +
+                (f.collapsed ? '<b>' + g.length + '</b>' : '');
+            lab.querySelector('span').textContent = f.name;
+            paintFc(lab, f);
+            lab.addEventListener('click', () => toggleFolderOpen(f.id));
+            box.appendChild(lab);
+            if (!f.collapsed) g.forEach(it => box.appendChild(mkChip(it, f)));
         });
+
+        const root = items.filter(it => !it.folder || !folders.some(f => f.id === it.folder));
+        if (root.length && box.children.length) {
+            const line = document.createElement('span');
+            line.className = 'qp-strip-sep-line';
+            box.appendChild(line);
+        }
+        root.forEach(it => box.appendChild(mkChip(it, null)));
+        box.scrollLeft = keepScroll;
         syncStates();
     }
 
@@ -1952,7 +1991,7 @@ function buildSettings() {
         const rBtn = mkRange('Размер кнопки', 24, 64, () => cfg.btnSize, (v) => { cfg.btnSize = v; applyMode(); });
         const rTab = mkRange('Размер закладки', 24, 64, () => cfg.btnSize, (v) => { cfg.btnSize = v; applyMode(); });
         const rStrip = mkRange('Высота строки', 20, 44, () => cfg.stripH, (v) => { cfg.stripH = v; if (stripEl) stripEl.style.setProperty('--qp-strip-h', v + 'px'); });
-        const rDock = mkRange('Ширина панели', 220, 440, () => cfg.dockW, (v) => { cfg.dockW = v; if (panel && panel.classList.contains('qp-open')) placePanel(false); });
+        const rDock = mkRange('Ширина панели', 180, 360, () => cfg.dockW, (v) => { cfg.dockW = v; if (panel && panel.classList.contains('qp-open')) placePanel(false); });
 
         const sideRow = document.createElement('div');
         sideRow.className = 'qp-size-row';
