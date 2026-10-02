@@ -10,7 +10,7 @@
     const LS_CFG    = 'qpConfig';
     const DRAG_THRESHOLD = 8;
     const LONGPRESS_MS = 500;
-    const OWN = '#qp-panel, #qp-btn, #qp-hl, #qp-toast, #qp-settings';
+    const OWN = '#qp-panel, #qp-btn, #qp-hl, #qp-toast, #qp-settings, #qp-strip';
 
     const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
     const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
@@ -28,7 +28,14 @@
     let folders = lsGet(LS_FOLDERS, []); // [{id, name, collapsed}]
     window.qpDebug = { get items() { return items; }, get folders() { return folders; }, resolveItem, fpScore, fingerprint, stateNode, sigOf, stateOf, markerPair };
    
-    let cfg   = Object.assign({ float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff', title: 'Твои кнопочки' }, lsGet(LS_CFG, {}));
+    let cfg   = Object.assign({
+        float: true, wand: true, icon: 'fa-bolt', accent: 'quote', accentColor: '#6aa9ff',
+        title: 'Твои кнопочки', mode: null, btnSize: 34, tabSide: 'right', tabTop: 50,
+        stripH: 26, dockW: 290
+    }, lsGet(LS_CFG, {}));
+    if (!cfg.mode) cfg.mode = cfg.float === false ? 'wand' : 'float';
+    if (cfg.mode === 'bar') cfg.mode = 'float';   // старые режимы из прошлой версии
+    if (cfg.mode === 'off') cfg.mode = 'wand';
 
     const saveItems   = () => lsSet(LS_ITEMS, items.map(({ _el, _missAt, ...rest }) => rest));
     const saveCfg     = () => lsSet(LS_CFG, cfg);
@@ -616,6 +623,21 @@
             toast(p ? 'Удаление заблокировано' : 'Удаление разрешено');
         });
 
+        let sw = null;
+        panel.addEventListener('touchstart', (e) => {
+            sw = (panel.classList.contains('qp-docked') && e.touches.length === 1)
+                ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+        }, { passive: true });
+        panel.addEventListener('touchend', (e) => {
+            if (!sw) return;
+            const t = e.changedTouches[0];
+            const dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+            sw = null;
+            if ((dnd && dnd.active) || justDragged()) return;
+            const out = cfg.tabSide === 'left' ? -dx : dx;
+            if (out > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) closePanel();
+        }, { passive: true });
+
         paintTitle();
         panel.querySelector('.qp-title').addEventListener('click', (e) => {
             if (!panel.classList.contains('qp-editing')) return;
@@ -1023,30 +1045,34 @@
                 return;
             }
             if (chip.classList.contains('qp-has-sel')) return;
-            if (it.ad) {
-                chip.classList.remove('qp-flash'); void chip.offsetWidth; chip.classList.add('qp-flash');
-                adFire(it); syncStates();
-                return;
-            }
-            it._missAt = 0;
-            const t = resolveItem(it);
-            if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
-            const before = sigOf(t);
-            chip.classList.remove('qp-flash');
-            void chip.offsetWidth;
-            chip.classList.add('qp-flash');
-            fire(t);
-            [80, 220, 500, 1000, 1800].forEach(ms => setTimeout(() => {
-                const t2 = resolveItem(it);
-                if (t2) learnSig(it, before, sigOf(t2));
-                syncStates();
-            }, ms));
+            activateItem(it, chip);
         });
 
         return chip;
     }
 
+    // Нажатие на чип — хоть в панели, хоть в ленте
+    function activateItem(it, flashEl) {
+        const flash = () => {
+            if (!flashEl) return;
+            flashEl.classList.remove('qp-flash'); void flashEl.offsetWidth; flashEl.classList.add('qp-flash');
+        };
+        if (it.ad) { flash(); adFire(it); syncStates(); return; }
+        it._missAt = 0;
+        const t = resolveItem(it);
+        if (!t) { toast('Элемент не найден. Удали чип и добавь заново.'); renderList(); return; }
+        const before = sigOf(t);
+        flash();
+        fire(t);
+        [80, 220, 500, 1000, 1800].forEach(ms => setTimeout(() => {
+            const t2 = resolveItem(it);
+            if (t2) learnSig(it, before, sigOf(t2));
+            syncStates();
+        }, ms));
+    }
+
     function renderList() {
+        renderStrip();
         if (!listEl) return;
         items.forEach(it => { it._missAt = 0; });
         listEl.innerHTML = '';
@@ -1334,8 +1360,14 @@
     }
 
     function syncStates() {
-        if (!listEl || !panel.classList.contains('qp-open') || document.hidden) return;
-        listEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach((chip) => {
+        if (document.hidden) return;
+        const open = panel && panel.classList.contains('qp-open');
+        if (!open && !stripEl) return;
+        if (open && listEl) listEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach(paintChip);
+        if (stripEl) stripEl.querySelectorAll('.qp-chip[data-qp-item-id]').forEach(paintChip);
+    }
+
+    function paintChip(chip) {
             const it = items.find(x => x.id === chip.dataset.qpItemId);
             if (!it) return;
             if (it.ad) {
@@ -1353,7 +1385,6 @@
             chip.classList.toggle('qp-tgl', st !== 'none');
             chip.classList.toggle('qp-on', st === 'on');
             chip.classList.toggle('qp-unknown', st === 'unknown');
-        });
     }
 
     let mo = null, lastSync = 0, syncPend = null;
@@ -1377,8 +1408,52 @@
     }
     function stopWatch() { if (mo) { mo.disconnect(); mo = null; } }
 
+    // Размер видимой области. На телефонах innerHeight врёт (клавиатура, адресная строка),
+    // поэтому высоту берём из visualViewport — в той же системе, что getBoundingClientRect.
+    const vp = () => ({
+        w: document.documentElement.clientWidth || window.innerWidth,
+        h: (window.visualViewport && window.visualViewport.height) || document.documentElement.clientHeight || window.innerHeight
+    });
+
+    // Режим «закладка»: панель выезжает сбоку и занимает высоту экрана
+    function placeDocked() {
+        const { w: vw, h: vh } = vp();
+        const w = Math.min(clamp(cfg.dockW || 290, 220, 440), Math.round(vw * 0.86));
+        const left = cfg.tabSide === 'left';
+        panel.classList.add('qp-docked');
+        panel.classList.toggle('qp-dock-left', left);
+        panel.style.width  = w + 'px';
+        panel.style.height = Math.max(200, vh - 16) + 'px';
+        panel.style.top    = '8px';
+        panel.style.left   = (left ? 0 : vw - w) + 'px';
+    }
+
+    // Режим «строка»: панель открывается над строкой, по её правому краю
+    function placeAboveStrip() {
+        const { w: vw, h: vh } = vp();
+        const r = stripEl.getBoundingClientRect();
+        const w = Math.min(isMobile() ? 300 : 260, vw - 12);
+        panel.style.width = w + 'px';
+        panel.style.left = clamp(r.right - w, 6, Math.max(6, vw - w - 6)) + 'px';
+        const spaceAbove = r.top - 12, spaceBelow = vh - r.bottom - 12;
+        const above = spaceAbove >= 200 || spaceAbove >= spaceBelow;
+        const avail = Math.max(160, above ? spaceAbove : spaceBelow);
+        const h = Math.min(320, avail);
+        panel.style.height = h + 'px';
+        panel.style.top = Math.max(6, above ? r.top - 6 - h : r.bottom + 6) + 'px';
+    }
+
     function placePanel(ignoreSaved) {
+        panel.classList.toggle('qp-docked', cfg.mode === 'tab');
+        if (cfg.mode !== 'tab') panel.classList.remove('qp-dock-left');
+        if (cfg.mode === 'tab') return placeDocked();
+        if (cfg.mode === 'strip' && stripEl && stripEl.isConnected) return placeAboveStrip();
         const box = ignoreSaved ? null : lsGet(boxKey(), null);
+        if (!isMobile()) {
+            // после боковой панели/строки возвращаем обычный размер окна
+            panel.style.width  = (box && box.width  ? clamp(box.width, 150, window.innerWidth - 16) : 200) + 'px';
+            panel.style.height = (box && box.height ? clamp(box.height, 140, window.innerHeight - 16) : 230) + 'px';
+        }
         if (isMobile()) {
             const defW = Math.min(220, Math.round(window.innerWidth * 0.62));
             panel.style.width = (box && typeof box.width === 'number')
@@ -1409,7 +1484,7 @@
     }
 
     function saveBox() {
-        if (!panel) return;
+        if (!panel || cfg.mode === 'tab' || cfg.mode === 'strip') return; // там размер задаёт режим
         lsSet(boxKey(), { left: panel.offsetLeft, top: panel.offsetTop, width: panel.offsetWidth, height: panel.offsetHeight });
     }
 
@@ -1419,18 +1494,23 @@ function openPanel() {
         openedAt = Date.now();
         requestAnimationFrame(() => placePanel(false));
         renderList();
-        startWatch();
-        clearInterval(tickTimer);
-        tickTimer = setInterval(syncStates, 2000);
+        ensureTick();
     }
     function closePanel() {
         if (panel && panel.classList.contains('qp-open')) saveBox();
         if (panel) panel.classList.remove('qp-open');
-        clearInterval(tickTimer);
-        stopWatch();
+        ensureTick();
         stopPick();
     }
     
+    // Следим за состояниями, пока открыта панель или висит лента
+    function ensureTick() {
+        clearInterval(tickTimer);
+        const need = (panel && panel.classList.contains('qp-open')) || !!stripEl;
+        if (need) { startWatch(); tickTimer = setInterval(syncStates, 2000); }
+        else stopWatch();
+    }
+
     function togglePanel() {
         if (panel && panel.classList.contains('qp-open')) closePanel(); else openPanel();
     }
@@ -1441,6 +1521,7 @@ function openPanel() {
         let sx = 0, sy = 0, ox = 0, oy = 0, act = false, moved = false, id = null;
         handle.addEventListener('pointerdown', (e) => {
             if (e.target.closest('.qp-ico')) return;
+            if (el.classList.contains('qp-docked')) return;
             act = true; moved = false; id = e.pointerId;
             sx = e.clientX; sy = e.clientY; ox = el.offsetLeft; oy = el.offsetTop;
             handle.setPointerCapture(id);
@@ -1508,26 +1589,38 @@ function openPanel() {
     })();
 
     (function btnInteraction() {
-        let sx = 0, sy = 0, ox = 0, oy = 0, down = false, moved = false, id = null, longTimer = null;
+        let sx = 0, sy = 0, ox = 0, oy = 0, down = false, moved = false, axis = null, id = null, longTimer = null;
+        const inward = (dx) => cfg.tabSide === 'left' ? dx : -dx;
         btn.addEventListener('pointerdown', (e) => {
-            down = true; moved = false; id = e.pointerId;
+            down = true; moved = false; axis = null; id = e.pointerId;
             sx = e.clientX; sy = e.clientY; ox = btn.offsetLeft; oy = btn.offsetTop;
             btn.setPointerCapture(id);
             btn.classList.add('qp-press');
             longTimer = setTimeout(() => {
-                if (down && !moved) {
-                    longTimer = null;
-                    startPick();
-                }
+                if (down && !moved) { longTimer = null; startPick(); }
             }, LONGPRESS_MS);
         });
         btn.addEventListener('pointermove', (e) => {
             if (!down || e.pointerId !== id) return;
             const dx = e.clientX - sx, dy = e.clientY - sy;
             if (!moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
-            moved = true;
-            clearTimeout(longTimer);
+            if (!moved) {
+                moved = true;
+                clearTimeout(longTimer);
+                axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+            }
             e.preventDefault();
+            if (cfg.mode === 'tab') {
+                if (axis === 'y') {
+                    // тянем закладку вдоль края
+                    btn.style.top = clamp(oy + dy, 4, window.innerHeight - btn.offsetHeight - 4) + 'px';
+                } else {
+                    // свайп от края: закладка чуть вытягивается за пальцем
+                    const pull = clamp(inward(dx), 0, 28);
+                    btn.style.transform = 'translateX(' + (cfg.tabSide === 'left' ? pull : -pull) + 'px)';
+                }
+                return;
+            }
             btn.style.left = clamp(ox + dx, 4, window.innerWidth  - btn.offsetWidth  - 4) + 'px';
             btn.style.top  = clamp(oy + dy, 4, window.innerHeight - btn.offsetHeight - 4) + 'px';
         });
@@ -1536,15 +1629,154 @@ function openPanel() {
             down = false;
             clearTimeout(longTimer);
             btn.classList.remove('qp-press');
-            if (moved) lsSet(LS_BTNPOS, { left: btn.offsetLeft, top: btn.offsetTop });
-            else if (!picking) togglePanel();
+            if (!moved) { if (!picking) togglePanel(); return; }
+            if (cfg.mode === 'tab') {
+                btn.style.transform = '';
+                if (axis === 'x') {
+                    if (inward(e.clientX - sx) > 16) openPanel();
+                } else {
+                    cfg.tabTop = clamp(Math.round(((btn.offsetTop + btn.offsetHeight / 2) / window.innerHeight) * 100), 3, 97);
+                    saveCfg(); placeTab();
+                }
+                return;
+            }
+            lsSet(LS_BTNPOS, { left: btn.offsetLeft, top: btn.offsetTop });
         });
-        btn.addEventListener('pointercancel', () => { down = false; clearTimeout(longTimer); btn.classList.remove('qp-press'); });
+        btn.addEventListener('pointercancel', () => {
+            down = false; clearTimeout(longTimer);
+            btn.classList.remove('qp-press');
+            btn.style.transform = '';
+        });
     })();
 
-    function applyFloat() {
-        btn.classList.toggle('qp-hidden', !cfg.float);
-        if (!cfg.float) closePanel();
+    const MODES = {
+        float: { label: 'Плавающая кнопка',         ic: 'fa-circle-dot',  desc: 'Кнопка, которую можно таскать по всему экрану.' },
+        strip: { label: 'Строка над полем ввода',   ic: 'fa-grip-lines',  desc: 'Тонкая лента с кнопками над полем ввода. Листается вбок и тянется по ширине чата.' },
+        tab:   { label: 'Закладка сбоку',           ic: 'fa-bookmark',    desc: 'Язычок у края экрана. Тап или свайп от края — выезжает боковая панель.' },
+        wand:  { label: 'Только в волшебной палочке', ic: 'fa-wand-magic-sparkles', desc: 'На экране ничего не висит, панель открывается из меню палочки.' }
+    };
+
+    let stripEl = null;
+
+    function placeTab() {
+        btn.classList.toggle('qp-tab-left', cfg.tabSide === 'left');
+        const w = btn.offsetWidth || 18, h = btn.offsetHeight || 50;
+        btn.style.left = (cfg.tabSide === 'left' ? 0 : Math.max(0, window.innerWidth - w)) + 'px';
+        btn.style.top = clamp(Math.round(window.innerHeight * (cfg.tabTop / 100) - h / 2), 4, Math.max(4, window.innerHeight - h - 4)) + 'px';
+    }
+
+    function placeFloat() {
+        const saved = lsGet(LS_BTNPOS, null);
+        const w = btn.offsetWidth || cfg.btnSize, h = btn.offsetHeight || cfg.btnSize;
+        const left = saved && typeof saved.left === 'number' ? saved.left : window.innerWidth - w - 14;
+        const top  = saved && typeof saved.top  === 'number' ? saved.top  : Math.round(window.innerHeight * 0.5);
+        btn.style.left = clamp(left, 4, Math.max(4, window.innerWidth - w - 4)) + 'px';
+        btn.style.top  = clamp(top,  4, Math.max(4, window.innerHeight - h - 4)) + 'px';
+    }
+
+    function applyMode() {
+        const m = cfg.mode;
+        cfg.float = m !== 'wand';
+        btn.style.setProperty('--qp-btn-size', clamp(cfg.btnSize || 34, 22, 72) + 'px');
+        btn.style.transform = '';
+        btn.classList.toggle('qp-hidden', m !== 'float' && m !== 'tab');
+        btn.classList.toggle('qp-tab', m === 'tab');
+        if (btn.parentElement !== document.body) document.body.appendChild(btn);
+        if (m === 'tab') placeTab();
+        else if (m === 'float') placeFloat();
+
+        if (m === 'strip') mountStrip(); else unmountStrip();
+        if (panel && panel.classList.contains('qp-open')) placePanel(false);
+        mountWand();
+    }
+
+    /* ---------------- СТРОКА НАД ПОЛЕМ ВВОДА ---------------- */
+    // Встаёт в #form_sheld прямо перед #send_form, как обычный блок: ширину берёт у чата сама.
+    // Чужие полосы других расширений там же не трогаем и не переставляем.
+
+    function mountStrip() {
+        let fresh = false;
+        if (!stripEl) {
+            fresh = true;
+            stripEl = document.createElement('div');
+            stripEl.id = 'qp-strip';
+            stripEl.innerHTML = '<div class="qp-strip-scroll"></div>' +
+                '<div class="qp-strip-more" title="Открыть панель (зажми — добавить элемент)"><i class="fa-solid fa-bolt"></i></div>';
+            ['pointerdown', 'mousedown', 'click', 'touchstart'].forEach(ev =>
+                stripEl.addEventListener(ev, (e) => e.stopPropagation()));
+            const more = stripEl.querySelector('.qp-strip-more');
+            let lp = null, lpFired = false;
+            more.addEventListener('pointerdown', () => {
+                lpFired = false;
+                lp = setTimeout(() => { lpFired = true; startPick(); }, LONGPRESS_MS);
+            });
+            ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => more.addEventListener(ev, () => clearTimeout(lp)));
+            more.addEventListener('click', () => { if (!lpFired && !picking) togglePanel(); });
+            // колесо мыши листает строку вбок
+            const sc = stripEl.querySelector('.qp-strip-scroll');
+            sc.addEventListener('wheel', (e) => {
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { sc.scrollLeft += e.deltaY; e.preventDefault(); }
+            }, { passive: false });
+        }
+        stripEl.style.setProperty('--qp-strip-h', clamp(cfg.stripH || 26, 20, 44) + 'px');
+
+        const sheld = document.getElementById('form_sheld');
+        const form = document.getElementById('send_form');
+        if (sheld && form && form.parentNode === sheld) {
+            stripEl.classList.remove('qp-strip-fixed');
+            if (stripEl.parentNode !== sheld) sheld.insertBefore(stripEl, form);
+        } else if (!stripEl.isConnected) {
+            stripEl.classList.add('qp-strip-fixed');   // запасной вариант, если разметка таверны другая
+            document.body.appendChild(stripEl);
+        }
+        if (fresh) { renderStrip(); applyLook(); }
+        ensureTick();
+    }
+
+    function unmountStrip() {
+        if (!stripEl) return;
+        stripEl.remove();
+        stripEl = null;
+        ensureTick();
+    }
+
+    function renderStrip() {
+        if (!stripEl) return;
+        const box = stripEl.querySelector('.qp-strip-scroll');
+        box.innerHTML = '';
+        if (!items.length) {
+            box.innerHTML = '<span class="qp-strip-empty">Пусто — зажми кнопку справа, чтобы добавить</span>';
+            return;
+        }
+        const order = [];
+        folders.forEach(f => {
+            const g = items.filter(it => it.folder === f.id);
+            if (g.length) order.push({ sep: f.name }, ...g);
+        });
+        const root = items.filter(it => !it.folder || !folders.some(f => f.id === it.folder));
+        if (root.length && order.length) order.push({ sep: '' });
+        order.push(...root);
+
+        order.forEach(entry => {
+            if (entry.sep !== undefined) {
+                const s = document.createElement('span');
+                s.className = 'qp-strip-sep' + (entry.sep ? '' : ' qp-strip-sep-line');
+                s.textContent = entry.sep;
+                box.appendChild(s);
+                return;
+            }
+            const it = entry;
+            const c = document.createElement('div');
+            c.className = 'qp-chip qp-strip-chip';
+            c.dataset.qpItemId = it.id;
+            c.title = it.name;
+            c.innerHTML = '<span class="qp-chip-dot"></span><i class="' + (it.icon || 'fa-solid fa-circle-dot') + ' qp-chip-ic"></i>' +
+                '<span class="qp-chip-lb"></span>';
+            c.querySelector('.qp-chip-lb').textContent = it.name;
+            c.addEventListener('click', () => activateItem(it, c));
+            box.appendChild(c);
+        });
+        syncStates();
     }
 
     /* ---------------- ВНЕШНИЙ ВИД: иконка и акцентный цвет ---------------- */
@@ -1581,6 +1813,8 @@ function openPanel() {
         if (bi) bi.className = 'fa-solid ' + ic;
         const wd = document.querySelector('#qp-wand .extensionsMenuExtensionButton');
         if (wd) wd.className = 'fa-solid ' + ic + ' extensionsMenuExtensionButton';
+        const si = stripEl && stripEl.querySelector('.qp-strip-more i');
+        if (si) si.className = 'fa-solid ' + ic;
         const ti = panel && panel.querySelector('.qp-title i');
         if (ti) ti.className = 'fa-solid ' + ic;
 
@@ -1606,7 +1840,7 @@ function openPanel() {
             item.addEventListener('click', () => togglePanel());
             menu.appendChild(item);
         }
-        item.classList.toggle('qp-hidden', !cfg.wand);
+        item.classList.toggle('qp-hidden', !(cfg.wand || cfg.mode === 'wand'));
         applyLook();
         return true;
     }
@@ -1672,34 +1906,118 @@ function buildSettings() {
             return { label: l, sync };
         };
 
-        const cFloat = mkCheck('qp-cfg-float', 'Плавающая кнопка',
-            () => cfg.float,
-            (v) => { cfg.float = v; saveCfg(); applyFloat(); }
-        );
-        const cWand = mkCheck('qp-cfg-wand', 'Пункт в меню палочки',
+        // --- Как показывать панель: карточки режимов + настройки выбранного ---
+        const modeBlock = document.createElement('div');
+        modeBlock.className = 'qp-set-block';
+        modeBlock.innerHTML = '<div class="qp-set-cap">Где показывать</div>';
+        const modeGrid = document.createElement('div');
+        modeGrid.className = 'qp-mode-grid';
+        Object.entries(MODES).forEach(([key, m]) => {
+            const card = document.createElement('div');
+            card.className = 'qp-mode-card';
+            card.dataset.mode = key;
+            card.innerHTML = '<i class="fa-solid ' + m.ic + ' qp-mode-ic"></i>' +
+                '<div class="qp-mode-txt"><b></b><small></small></div>';
+            card.querySelector('b').textContent = m.label;
+            card.querySelector('small').textContent = m.desc;
+            card.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                cfg.mode = key; saveCfg(); applyMode(); syncMode();
+            });
+            modeGrid.appendChild(card);
+        });
+
+        // Настройки выбранного режима
+        const opts = document.createElement('div');
+        opts.className = 'qp-mode-opts';
+        const mkRange = (label, min, max, get, set, unit = 'px') => {
+            const row = document.createElement('div');
+            row.className = 'qp-size-row';
+            const lb = document.createElement('span');
+            lb.className = 'qp-size-lb';
+            lb.textContent = label;
+            const inp = document.createElement('input');
+            inp.type = 'range'; inp.min = String(min); inp.max = String(max); inp.step = '1';
+            inp.className = 'qp-size-inp';
+            const val = document.createElement('span');
+            val.className = 'qp-size-val';
+            const sync = () => { inp.value = String(get()); val.textContent = inp.value + unit; };
+            ['pointerdown', 'click'].forEach(ev => inp.addEventListener(ev, e => e.stopPropagation()));
+            inp.addEventListener('input', (e) => { e.stopPropagation(); set(Number(inp.value)); val.textContent = inp.value + unit; });
+            inp.addEventListener('change', () => saveCfg());
+            row.append(lb, inp, val);
+            sync();
+            return { row, sync };
+        };
+        const rBtn = mkRange('Размер кнопки', 24, 64, () => cfg.btnSize, (v) => { cfg.btnSize = v; applyMode(); });
+        const rTab = mkRange('Размер закладки', 24, 64, () => cfg.btnSize, (v) => { cfg.btnSize = v; applyMode(); });
+        const rStrip = mkRange('Высота строки', 20, 44, () => cfg.stripH, (v) => { cfg.stripH = v; if (stripEl) stripEl.style.setProperty('--qp-strip-h', v + 'px'); });
+        const rDock = mkRange('Ширина панели', 220, 440, () => cfg.dockW, (v) => { cfg.dockW = v; if (panel && panel.classList.contains('qp-open')) placePanel(false); });
+
+        const sideRow = document.createElement('div');
+        sideRow.className = 'qp-size-row';
+        sideRow.innerHTML = '<span class="qp-size-lb">Сторона</span><div class="qp-seg"></div>';
+        const seg = sideRow.querySelector('.qp-seg');
+        [['left', 'Слева', 'fa-arrow-left'], ['right', 'Справа', 'fa-arrow-right']].forEach(([key, txt, ic]) => {
+            const b = document.createElement('div');
+            b.className = 'qp-seg-btn';
+            b.dataset.side = key;
+            b.innerHTML = '<i class="fa-solid ' + ic + '"></i> ' + txt;
+            b.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+                cfg.tabSide = key; saveCfg(); applyMode(); syncMode();
+            });
+            seg.appendChild(b);
+        });
+
+        const modeTip = document.createElement('small');
+        modeTip.className = 'qp-set-hint';
+        const TIPS = {
+            float: 'Тяни кнопку куда удобно. Зажми — включится прицел для добавления.',
+            strip: 'Тап по чипу — нажать кнопку. Справа — открыть панель, зажать её — добавить элемент. Колёсиком мыши строка тоже листается.',
+            tab: 'Тяни закладку вверх-вниз вдоль края. Свайп от края или тап — открыть, свайп обратно к краю — закрыть.',
+            wand: 'Открывается через меню волшебной палочки слева от поля ввода.'
+        };
+        opts.append(rBtn.row, rTab.row, sideRow, rDock.row, rStrip.row, modeTip);
+
+        const syncMode = () => {
+            const m = cfg.mode;
+            modeGrid.querySelectorAll('.qp-mode-card').forEach(c => c.classList.toggle('qp-sel', c.dataset.mode === m));
+            seg.querySelectorAll('.qp-seg-btn').forEach(b => b.classList.toggle('qp-sel', b.dataset.side === cfg.tabSide));
+            rBtn.row.classList.toggle('qp-hidden', m !== 'float');
+            rTab.row.classList.toggle('qp-hidden', m !== 'tab');
+            sideRow.classList.toggle('qp-hidden', m !== 'tab');
+            rDock.row.classList.toggle('qp-hidden', m !== 'tab');
+            rStrip.row.classList.toggle('qp-hidden', m !== 'strip');
+            modeTip.textContent = TIPS[m] || '';
+            if (typeof cWand !== 'undefined') cWand.label.classList.toggle('qp-hidden', m === 'wand');
+            [rBtn, rTab, rStrip, rDock].forEach(r => r.sync());
+        };
+        modeBlock.append(modeGrid, opts);
+
+        const cWand = mkCheck('qp-cfg-wand', 'Ещё и в меню волшебной палочки',
             () => cfg.wand,
             (v) => { cfg.wand = v; saveCfg(); mountWand(); }
         );
 
         const row = document.createElement('div');
         row.className = 'qp-set-row';
-        const bOpen  = document.createElement('div');
-        bOpen.className = 'menu_button menu_button_icon';
-        bOpen.textContent = 'Открыть/закрыть панель';
-        const bPick  = document.createElement('div');
-        bPick.className = 'menu_button menu_button_icon';
-        bPick.textContent = 'Добавить элемент';
-        const bReset = document.createElement('div');
-        bReset.className = 'menu_button menu_button_icon';
-        bReset.textContent = 'Сбросить положение';
-        const bClear = document.createElement('div');
-        bClear.className = 'menu_button menu_button_icon qp-danger';
-        bClear.textContent = 'Очистить список';
+        const mkBtn = (ic, txt, extra = '') => {
+            const b = document.createElement('div');
+            b.className = 'menu_button menu_button_icon ' + extra;
+            b.innerHTML = '<i class="fa-solid ' + ic + '"></i><span></span>';
+            b.querySelector('span').textContent = txt;
+            return b;
+        };
+        const bOpen  = mkBtn('fa-up-right-from-square', 'Открыть панель');
+        const bPick  = mkBtn('fa-crosshairs', 'Добавить кнопку');
+        const bReset = mkBtn('fa-rotate-left', 'Сбросить положение');
+        const bClear = mkBtn('fa-trash', 'Очистить всё', 'qp-danger');
         row.append(bOpen, bPick, bReset, bClear);
 
         const hint = document.createElement('small');
         hint.className = 'qp-set-hint';
-        hint.textContent = 'Включи прицел и кликни по кнопке или тоглу. Корзинка — удалить. Карандаш — переименование; в этом режиме зажми чип или папку и перетащи (мышью — просто тяни). Двойной клик по шапке — сброс размера.';
+        hint.textContent = 'Прицел — тапни по любой кнопке или тоглу таверны, и он появится в панели. Карандаш — переименовать и перетаскивать (зажми чип или папку). Замок — запретить удаление.';
 
         // Свёрнутый подраздел: содержимое строится при первом открытии
         const mkSection = (title, previewFn, build) => {
@@ -1792,7 +2110,14 @@ function buildSettings() {
                 mark();
             });
 
-        inner.append(cFloat.label, cWand.label, icoBlock, accBlock, row, hint);
+        const capLook = document.createElement('div');
+        capLook.className = 'qp-set-cap';
+        capLook.textContent = 'Внешний вид';
+        const capAct = document.createElement('div');
+        capAct.className = 'qp-set-cap';
+        capAct.textContent = 'Действия';
+        inner.append(modeBlock, cWand.label, capLook, icoBlock, accBlock, capAct, row, hint);
+        syncMode();
         body.appendChild(inner);
         block.append(head, body);
         host.appendChild(block);
@@ -1802,7 +2127,7 @@ function buildSettings() {
             block.classList.toggle('qp-set-open');
         }, true);
 
-        const syncChecks = () => { cFloat.sync(); cWand.sync(); };
+        const syncChecks = () => { cWand.sync(); };
         const guard = (fn) => (e) => {
             e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
             fn();
@@ -1815,12 +2140,13 @@ function buildSettings() {
         bPick.addEventListener('click', guard(() => startPick()));
         bReset.addEventListener('click', guard(() => {
             try { localStorage.removeItem(LS_BTNPOS); localStorage.removeItem(LS_BOX_D); localStorage.removeItem(LS_BOX_M); } catch (e) {}
-            const w = btn.offsetWidth || 34;
-            btn.style.left = (window.innerWidth - w - 14) + 'px';
-            btn.style.top  = Math.round(window.innerHeight * 0.5) + 'px';
+            cfg.tabTop = 50; cfg.tabSide = 'right'; saveCfg();
+            applyMode();
             if (panel) { panel.style.width = '200px'; panel.style.height = '230px'; requestAnimationFrame(() => placePanel(true)); }
         }));
         bClear.addEventListener('click', guard(() => {
+            if (panel && panel.classList.contains('qp-locked')) { toast('Сначала открой замок в панели'); return; }
+            if (!confirm('Удалить все кнопки из панели?')) return;
             items = []; saveItems(); renderList(); toast('Список очищен');
         }));
 
@@ -1830,16 +2156,34 @@ function buildSettings() {
 
     /* ---------------- СТАРТ ---------------- */
 
-    applyFloat();
+    applyMode();
     applyLook();
 
+    const onViewport = () => {
+        if (cfg.mode === 'tab') placeTab();
+        if (panel && panel.classList.contains('qp-open') && (cfg.mode === 'tab' || cfg.mode === 'strip')) placePanel(false);
+    };
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onViewport);
+
+    // Строку над полем ввода таверна может пересоздать (смена чата, тема) — тихо возвращаем на место
+    setInterval(() => {
+        if (cfg.mode !== 'strip') return;
+        const form = document.getElementById('send_form');
+        if (!stripEl || !stripEl.isConnected || (form && stripEl.parentNode !== form.parentNode)) {
+            if (stripEl && !stripEl.isConnected) stripEl = null;
+            mountStrip();
+        }
+    }, 2000);
+
     window.addEventListener('resize', () => {
+        onViewport();
+        if (cfg.mode !== 'float') return;
         const w = btn.offsetWidth, h = btn.offsetHeight;
         if (btn.offsetLeft > window.innerWidth - w - 4 || btn.offsetTop > window.innerHeight - h - 4) {
             btn.style.left = clamp(btn.offsetLeft, 4, window.innerWidth - w - 4) + 'px';
             btn.style.top  = clamp(btn.offsetTop,  4, window.innerHeight - h - 4) + 'px';
         }
-        if (panel && panel.classList.contains('qp-open')) {
+        if (panel && panel.classList.contains('qp-open') && cfg.mode === 'float') {
             const pw = panel.offsetWidth, ph = panel.offsetHeight;
             if (panel.offsetLeft > window.innerWidth - pw - 4 || panel.offsetTop > window.innerHeight - ph - 4) {
                 panel.style.left = clamp(panel.offsetLeft, 4, Math.max(4, window.innerWidth  - pw - 4)) + 'px';
@@ -1858,6 +2202,7 @@ function buildSettings() {
         const iv = setInterval(() => {
             const a = buildSettings();
             const b = mountWand();
+            applyMode();
             if ((a && b) || ++tries > 80) clearInterval(iv);
         }, 500);
     })();
